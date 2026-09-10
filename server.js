@@ -286,7 +286,7 @@ api.post('/api/auth/register', async (req, res) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return sendJson(res, 400, { error: 'รูปแบบอีเมลไม่ถูกต้อง' });
   if (!b.password) return sendJson(res, 400, { error: 'กรุณากรอกรหัสผ่าน' });
   if (String(b.password).length < 8) return sendJson(res, 400, { error: 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร' });
-  if (store.findOne('users', (u) => u.email === email)) return sendJson(res, 409, { error: 'อีเมลนี้ถูกใช้แล้ว' });
+  if (store.whereOne('users', { email })) return sendJson(res, 409, { error: 'อีเมลนี้ถูกใช้แล้ว' });
 
   // ห้ามสมัครเป็นผู้ดูแลระบบผ่านหน้าลงทะเบียน
   const role = ['agency', 'corporate', 'creator'].includes(b.role) ? b.role : 'creator';
@@ -362,7 +362,7 @@ api.post('/api/auth/login', async (req, res) => {
   // ข้อ: ไม่มี rate limit ที่ login — จำกัดทั้งต่อ IP (กัน brute-force กว้างๆ) และต่อ IP+อีเมล (กัน targeted)
   if (rateLimited(res, `login:ip:${ratelimit.clientIp(req)}`, 30, 10 * 60 * 1000)) return;
   if (email && rateLimited(res, `login:acct:${ratelimit.clientIp(req)}:${email}`, 8, 10 * 60 * 1000, 'ลองเข้าสู่ระบบผิดถี่เกินไป กรุณารอสักครู่แล้วลองใหม่')) return;
-  const user = store.findOne('users', (u) => u.email === email);
+  const user = store.whereOne('users', { email });
   if (!user || !auth.verifyPassword(b.password, user.passwordHash)) return sendJson(res, 401, { error: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' });
 
   // บัญชีที่ยังไม่ได้ยืนยันอีเมล ให้กลับไปทำขั้นตอนยืนยันอีเมลให้เสร็จก่อน
@@ -724,6 +724,8 @@ api.post('/api/pdpa/delete-account', requireAuth(async (req, res) => {
   const oldName = req.user.displayName;
   const ANON_LABEL = 'ผู้ใช้ที่ลบบัญชีแล้ว';
 
+  // ข้อ: การลบบัญชีแก้หลายตารางพร้อมกัน ถ้าล้มเหลวกลางทางไม่ควรเหลือข้อมูลค้างครึ่งๆ กลางๆ — ครอบด้วย transaction
+  store.transaction(() => {
   // ลบไฟล์ทั้งหมดที่เป็นข้อมูลส่วนบุคคล
   for (const k of store.all('kyc_documents', (x) => x.userId === uid)) {
     filestore.removeFile(store.UPLOAD_DIR, k.storedName);
@@ -775,6 +777,7 @@ api.post('/api/pdpa/delete-account', requireAuth(async (req, res) => {
   };
   store.update('users', uid, anon);
   logAudit(uid, null, 'account-delete', 'ผู้ใช้ใช้สิทธิขอลบข้อมูลส่วนบุคคล — ลบข้อมูลระบุตัวตนแล้ว คงเหลือเฉพาะเอกสารภาษีที่กฎหมายบังคับให้เก็บ', 'ระบบ');
+  }); // จบ store.transaction
   auth.clearSessionCookie(res);
   sendJson(res, 200, { ok: true });
 }));
@@ -1057,7 +1060,7 @@ api.post('/api/documents/:id/request', requireAuth(async (req, res) => {
   const b = await readJsonBody(req);
   const email = String(b.toEmail || '').trim().toLowerCase();
   if (!email) return sendJson(res, 400, { error: 'กรุณาระบุอีเมลผู้รับ' });
-  const target = store.findOne('users', (u) => u.email === email);
+  const target = store.whereOne('users', { email });
   if (!target) return sendJson(res, 404, { error: 'ไม่พบบัญชีผู้ใช้อีเมลนี้ในระบบ — คู่ค้าต้องสมัคร TaxFlow ด้วยอีเมลดังกล่าวก่อน' });
   if (target.id === req.user.id) return sendJson(res, 400, { error: 'ไม่สามารถส่งเอกสารหาตัวเองได้' });
   // ข้อ 4: ผู้ออกเอกสารต้องลงนามฝั่งตนเองก่อน จึงส่งขอลายเซ็นจากคู่ค้าได้

@@ -1,0 +1,13 @@
+{
+  "name": "taxflow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ระบบต้นแบบจัดการเอกสารภาษีสำหรับครีเอเตอร์/เอเจนซี่/แบรนด์ — Node.js core เท่านั้น (ไม่มี dependency ภายนอก)",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  }
+}
