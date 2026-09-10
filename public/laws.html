@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TaxFlow — กฎหมายที่เกี่ยวข้อง</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Kanit:wght@500;600;700&family=Noto+Sans+Thai+Looped:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="topnav"><div class="topnav-inner">
+  <div class="brand"><img src="/img/logo.png" alt="TaxFlow" class="brand-logo"></div>
+  <div style="display:flex;gap:14px;font-size:13.5px;font-weight:600;">
+    <a href="/overview.html" style="color:var(--ink-soft)">ภาพรวมระบบ</a>
+    <a href="/guide.html" style="color:var(--ink-soft)">คู่มือการใช้งาน</a>
+    <a href="/privacy.html" style="color:var(--ink-soft)">นโยบายความเป็นส่วนตัว</a>
+    <a href="/" style="color:var(--orange-deep)">กลับเข้าระบบ →</a>
+  </div>
+</div></div>
+
+<div class="doc-page">
+  <div class="eyebrow">Legal Reference</div>
+  <h1>กฎหมายที่เกี่ยวข้องกับแต่ละบทบาท</h1>
+  <p class="lede">สรุปหน้าที่ตามกฎหมายของอินฟลูเอนเซอร์ บริษัท (Brand) และเอเจนซี่ ในการทำงานร่วมกันและใช้เอกสารอิเล็กทรอนิกส์</p>
+
+  <div class="role-tabs">
+    <button class="role-tab active" data-r="all">ตารางรวมทุกบทบาท</button>
+    <button class="role-tab" data-r="creator">อินฟลูเอนเซอร์</button>
+    <button class="role-tab" data-r="corporate">บริษัท (Brand)</button>
+    <button class="role-tab" data-r="agency">เอเจนซี่</button>
+  </div>
+
+  <!-- ตารางรวม -->
+  <div class="law-panel active" id="p-all">
+    <div class="doc-section" style="overflow-x:auto">
+      <table class="law-table">
+        <thead><tr><th style="min-width:170px">กฎหมาย</th><th>อินฟลูเอนเซอร์</th><th>บริษัท (Brand)</th><th>เอเจนซี่ (Agency)</th></tr></thead>
+        <tbody>
+          <tr><td><b>ประมวลรัษฎากร</b></td>
+            <td><span class="law-check">✓</span> เสียภาษีเงินได้บุคคลธรรมดา และรับหนังสือรับรองหักภาษี ณ ที่จ่าย (50 ทวิ)</td>
+            <td><span class="law-check">✓</span> หักภาษี ณ ที่จ่าย ออก 50 ทวิ และเสียภาษีนิติบุคคล</td>
+            <td><span class="law-check">✓</span> หักภาษี ณ ที่จ่าย ออก 50 ทวิ และเสียภาษีนิติบุคคล</td></tr>
+          <tr><td><b>พ.ร.บ.ภาษีมูลค่าเพิ่ม (VAT)</b></td>
+            <td><span class="law-check">✓</span> หากจดทะเบียน VAT ต้องออกใบกำกับภาษี</td>
+            <td><span class="law-check">✓</span> จด VAT (ถ้าเข้าเกณฑ์) ออกใบกำกับภาษีและยื่น ภ.พ.30</td>
+            <td><span class="law-check">✓</span> จด VAT (ถ้าเข้าเกณฑ์) ออกใบกำกับภาษีและยื่น ภ.พ.30</td></tr>
+          <tr><td><b>พ.ร.บ.คุ้มครองข้อมูลส่วนบุคคล (PDPA) พ.ศ. 2562</b></td>
+            <td><span class="law-check">✓</span> ยินยอมให้ใช้ข้อมูลส่วนบุคคล</td>
+            <td><span class="law-check">✓</span> เก็บ ใช้ และเปิดเผยข้อมูลผู้ใช้อย่างถูกต้อง</td>
+            <td><span class="law-check">✓</span> เก็บ ใช้ และเปิดเผยข้อมูลผู้ใช้อย่างถูกต้อง</td></tr>
+          <tr><td><b>พ.ร.บ.ธุรกรรมทางอิเล็กทรอนิกส์ พ.ศ. 2544</b></td>
+            <td><span class="law-check">✓</span> ลงนามและทำสัญญาออนไลน์ได้</td>
+            <td><span class="law-check">✓</span> ใช้เอกสารและสัญญาอิเล็กทรอนิกส์ได้</td>
+            <td><span class="law-check">✓</span> ใช้เอกสารและสัญญาอิเล็กทรอนิกส์ได้</td></tr>
+          <tr><td><b>ประมวลกฎหมายแพ่งและพาณิชย์</b></td>
+            <td><span class="law-check">✓</span> ปฏิบัติตามสัญญาจ้างและส่งมอบงาน</td>
+            <td><span class="law-check">✓</span> ทำสัญญาว่าจ้าง ชำระค่าจ้างตามข้อตกลง</td>
+            <td><span class="law-check">✓</span> ทำสัญญาและบริหารการจ้างแทนลูกค้า</td></tr>
+          <tr><td><b>พ.ร.บ.ลิขสิทธิ์ พ.ศ. 2537</b></td>
+            <td><span class="law-check">✓</span> เป็นเจ้าของผลงาน เว้นแต่มีการโอนสิทธิ์ตามสัญญา</td>
+            <td><span class="law-check">✓</span> ใช้ผลงานตามสิทธิ์ที่ได้รับ</td>
+            <td><span class="law-check">✓</span> จัดการสิทธิ์การใช้ผลงานตามสัญญา</td></tr>
+          <tr><td><b>พ.ร.บ.ว่าด้วยการกระทำความผิดเกี่ยวกับคอมพิวเตอร์ พ.ศ. 2550</b></td>
+            <td><span class="law-check">✓</span> ใช้งานระบบโดยไม่กระทำผิดกฎหมาย</td>
+            <td><span class="law-check">✓</span> ดูแลความปลอดภัยของข้อมูลในระบบ</td>
+            <td><span class="law-check">✓</span> ดูแลความปลอดภัยของข้อมูลในระบบ</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- อินฟลูเอนเซอร์ -->
+  <div class="law-panel" id="p-creator">
+    <div class="doc-section">
+      <h2><span class="n">1</span>สรุปหน้าที่ของอินฟลูเอนเซอร์</h2>
+      <ul>
+        <li><b>ภาษี (ประมวลรัษฎากร):</b> เสียภาษีเงินได้บุคคลธรรมดาจากค่าจ้างรีวิว/ผลิตเนื้อหา — เก็บหนังสือรับรอง 50 ทวิ จากผู้ว่าจ้างทุกราย ใช้เป็นเครดิตภาษีตอนยื่น ภ.ง.ด.90/94</li>
+        <li><b>VAT:</b> หากรายได้เกิน 1.8 ล้านบาท/ปี ต้องจดทะเบียน VAT และออกใบกำกับภาษีเต็มรูป</li>
+        <li><b>สัญญา (แพ่งและพาณิชย์):</b> ปฏิบัติตามสัญญาจ้าง ส่งมอบงานตามกำหนดและขอบเขตที่ตกลง</li>
+        <li><b>ลิขสิทธิ์:</b> เป็นเจ้าของผลงานที่สร้าง เว้นแต่สัญญาระบุการโอนสิทธิ์ — ระวังการใช้เพลง/ภาพ/ฟอนต์ที่ติดลิขสิทธิ์ผู้อื่นในงาน</li>
+        <li><b>PDPA:</b> ให้ความยินยอมการใช้ข้อมูลส่วนบุคคล (ชื่อ เลขภาษี บัญชีธนาคาร) แก่ผู้ว่าจ้างเท่าที่จำเป็น</li>
+        <li><b>ธุรกรรมอิเล็กทรอนิกส์:</b> ลงนามสัญญาและรับเอกสารออนไลน์ได้ มีผลตามกฎหมาย</li>
+      </ul>
+      <div class="callout">ใช้ TaxFlow: บันทึก 50 ทวิ ทุกใบเข้าระบบ → ดูยอดรายได้สะสม + ประมาณการภาษีทั้งปี → เก็บไฟล์ ภ.ง.ด.90/94 และใบเสร็จในคลังเอกสาร</div>
+    </div>
+  </div>
+
+  <!-- บริษัท -->
+  <div class="law-panel" id="p-corporate">
+    <div class="doc-section">
+      <h2><span class="n">2</span>สรุปหน้าที่ของบริษัท (Brand)</h2>
+      <ul>
+        <li><b>ภาษี:</b> เมื่อจ่ายค่าจ้างอินฟลูเอนเซอร์ ต้องหักภาษี ณ ที่จ่าย (โดยทั่วไป 3% สำหรับค่าจ้างทำของ/บริการ) ออกหนังสือรับรอง 50 ทวิ ให้ผู้รับเงิน และนำส่งด้วยแบบ ภ.ง.ด.53 (นิติบุคคล) — เสียภาษีนิติบุคคลประจำปีด้วย ภ.ง.ด.50 และครึ่งปีด้วย ภ.ง.ด.51</li>
+        <li><b>VAT:</b> จดทะเบียน VAT เมื่อเข้าเกณฑ์ ออกใบกำกับภาษี และยื่น ภ.พ.30 รายเดือน — เก็บ ภ.พ.20 ไว้แสดงสถานะผู้ประกอบการ</li>
+        <li><b>สัญญา:</b> จัดทำสัญญาจ้าง Influencer เป็นลายลักษณ์อักษร ระบุขอบเขตงาน ค่าตอบแทน กำหนดจ่ายเงิน และการใช้สิทธิ์ผลงาน — ชำระเงินตามข้อตกลง</li>
+        <li><b>ลิขสิทธิ์:</b> ใช้ผลงานได้เฉพาะตามสิทธิ์ที่ได้รับในสัญญา (เช่น ระยะเวลา แพลตฟอร์ม) การใช้เกินสิทธิ์เป็นการละเมิด</li>
+        <li><b>PDPA:</b> เก็บข้อมูลส่วนบุคคลของอินฟลูเอนเซอร์ (บัตรประชาชน บัญชีธนาคาร) อย่างปลอดภัย ใช้ตามวัตถุประสงค์ และลบเมื่อหมดความจำเป็น</li>
+        <li><b>คอมพิวเตอร์ 2550:</b> ดูแลความปลอดภัยระบบข้อมูล ป้องกันการเข้าถึงโดยมิชอบ</li>
+      </ul>
+      <div class="callout">ใช้ TaxFlow: ออก e-Withholding ทุกครั้งที่จ่ายค่าจ้าง → เก็บสัญญาจ้าง/PO/ใบส่งมอบงาน/หลักฐานโอนเงินครบวงจรในคลังเอกสาร → ส่งออก CSV ประกอบการยื่น ภ.ง.ด.53</div>
+    </div>
+  </div>
+
+  <!-- เอเจนซี่ -->
+  <div class="law-panel" id="p-agency">
+    <div class="doc-section">
+      <h2><span class="n">3</span>สรุปหน้าที่ของเอเจนซี่ (Agency)</h2>
+      <ul>
+        <li><b>ภาษี:</b> หน้าที่เช่นเดียวกับบริษัท — หัก ณ ที่จ่ายเมื่อจ่ายค่าจ้างอินฟลูเอนเซอร์ ออก 50 ทวิ นำส่ง ภ.ง.ด.53 ยื่น ภ.พ.30 (ถ้าจด VAT) และภาษีนิติบุคคล ภ.ง.ด.50/51</li>
+        <li><b>สัญญา 2 ชั้น:</b> บริหารสัญญาทั้ง 2 ด้าน — สัญญากับแบรนด์ (รับจ้างบริหารแคมเปญ) และสัญญากับ Influencer (จ้างช่วงผลิตเนื้อหา) เงื่อนไขต้องสอดคล้องกัน โดยเฉพาะเรื่องสิทธิ์ผลงานและกำหนดชำระเงิน</li>
+        <li><b>ลิขสิทธิ์:</b> เป็นตัวกลางจัดการสิทธิ์ — ตรวจว่าสิทธิ์ที่ได้จากอินฟลูเอนเซอร์ครอบคลุมสิ่งที่สัญญากับแบรนด์สัญญาไว้</li>
+        <li><b>PDPA:</b> ถือข้อมูลส่วนบุคคลของอินฟลูเอนเซอร์จำนวนมาก (บัตรประชาชน สมุดบัญชี) — ต้องมีมาตรการเก็บรักษา จำกัดการเข้าถึง และเปิดเผยเท่าที่จำเป็นต่อแบรนด์</li>
+        <li><b>นิติบุคคล:</b> เตรียมเอกสารบริษัทให้พร้อมใช้เสมอ: หนังสือรับรองนิติบุคคล ภ.พ.20 หนังสือมอบอำนาจ บัตรผู้มีอำนาจ สมุดบัญชีบริษัท — ลูกค้าองค์กรมักขอตอนเปิด vendor</li>
+        <li><b>ธุรกรรมอิเล็กทรอนิกส์:</b> ใช้เอกสาร/สัญญาอิเล็กทรอนิกส์และลายมือชื่อดิจิทัลได้ตามกฎหมาย</li>
+      </ul>
+      <div class="callout">ใช้ TaxFlow: แยกหมวดคลังเอกสาร 3 กลุ่ม (บริษัท/ภาษี/ดำเนินงาน) ตรงกับเอกสารที่ลูกค้าองค์กรขอ → ออกใบกำกับภาษีให้แบรนด์ + e-Withholding ให้อินฟลูจากระบบเดียว</div>
+    </div>
+  </div>
+
+  <div class="doc-section" style="background:var(--orange-pale);border-color:var(--orange-soft)">
+    <p style="font-size:12.5px;margin:0"><b>ข้อจำกัดความรับผิดชอบ:</b> เนื้อหานี้เป็นการสรุปเพื่อการศึกษาในโครงงานระบบต้นแบบ ไม่ใช่คำแนะนำทางกฎหมาย — อัตราภาษี เกณฑ์ และหน้าที่ตามกฎหมายอาจเปลี่ยนแปลง โปรดตรวจสอบกับกรมสรรพากร (rd.go.th) หรือที่ปรึกษาภาษีก่อนดำเนินการจริง</p>
+  </div>
+</div>
+
+<script>
+document.querySelectorAll('.role-tab').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('.role-tab').forEach((x) => x.classList.remove('active'));
+  document.querySelectorAll('.law-panel').forEach((p) => p.classList.remove('active'));
+  b.classList.add('active');
+  document.getElementById('p-' + b.dataset.r).classList.add('active');
+}));
+</script>
+</body>
+</html>

@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TaxFlow — เข้าสู่ระบบ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Kanit:wght@500;600;700&family=Noto+Sans+Thai+Looped:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="auth-wrap">
+  <!-- แถบซ้าย -->
+  <div class="auth-brand">
+    <div class="blob b1"></div><div class="blob b2"></div>
+    <div class="brand"><img src="/img/logo.png" alt="TaxFlow" class="brand-logo brand-logo-hero"></div>
+    <div class="auth-hero">
+      <h1>จัดการเอกสารภาษี<br>ครบวงจรในเว็บเดียว</h1>
+      <p>สำหรับผู้ผลิตเนื้อหาดิจิทัล เอเจนซี่ และองค์กรธุรกิจ — คำนวณภาษี ออกใบกำกับภาษีอิเล็กทรอนิกส์ และจัดเก็บเอกสารเป็นดิจิทัล</p>
+    </div>
+    <div class="auth-feat">
+      <div><span class="dot">✓</span> คำนวณภาษีหัก ณ ที่จ่ายอัตโนมัติ</div>
+      <div><span class="dot">✓</span> ออกเอกสาร PDF พร้อมโลโก้ของคุณเอง</div>
+      <div><span class="dot">✓</span> ยืนยันตัวตนด้วยรหัส OTP ทางอีเมล</div>
+      <div><span class="dot">✓</span> เก็บข้อมูลเท่าที่จำเป็นตามหลัก PDPA</div>
+    </div>
+  </div>
+
+  <!-- แถบขวา -->
+  <div class="auth-form-wrap">
+    <div class="auth-card">
+
+      <!-- ========== เข้าสู่ระบบ ========== -->
+      <div id="login-view">
+        <h2>เข้าสู่ระบบ</h2>
+        <div class="sub">ยินดีต้อนรับกลับ กรอกข้อมูลเพื่อเข้าใช้งาน</div>
+        <div id="login-err" class="error-msg hidden"></div>
+        <div class="field"><label>อีเมล</label><input id="l-email" type="email" placeholder="you@example.com" autocomplete="username"></div>
+        <div class="field"><label>รหัสผ่าน</label><input id="l-pass" type="password" placeholder="••••••••" autocomplete="current-password"></div>
+        <button type="button" class="btn btn-solid btn-block" onclick="doLogin()">เข้าสู่ระบบ</button>
+        <div class="auth-switch">ยังไม่มีบัญชี? <a onclick="startRegister()">สมัครสมาชิก</a></div>
+      </div>
+
+      <!-- ========== OTP ========== -->
+      <div id="otp-view" class="hidden">
+        <h2 id="otp-title">ยืนยันตัวตนด้วย OTP</h2>
+        <div class="sub" id="otp-sub">ระบบส่งรหัสยืนยัน 6 หลักไปที่อีเมลของคุณ</div>
+        <div id="otp-notice" class="info-msg hidden"></div>
+        <div id="otp-dev" class="otp-dev-banner hidden">
+          โหมดพัฒนา (ยังไม่ได้ตั้งค่าอีเมลผู้ส่งจริง): รหัส OTP ของคุณคือ <b id="otp-dev-code"></b>
+        </div>
+        <div id="otp-err" class="error-msg hidden"></div>
+        <input id="otp-input" class="otp-box" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="······">
+        <button type="button" class="btn btn-solid btn-block" onclick="verifyOtp()">ยืนยัน</button>
+        <div class="otp-resend">ไม่ได้รับรหัส? <a id="otp-resend-link" class="hidden" onclick="resendOtp()">ส่งรหัสอีกครั้ง</a><span id="otp-cd"></span></div>
+        <div class="auth-switch"><a onclick="backToLogin()">← กลับไปหน้าเข้าสู่ระบบ</a></div>
+      </div>
+
+      <!-- ========== สมัครสมาชิก ========== -->
+      <div id="register-view" class="hidden">
+        <h2>สมัครสมาชิก</h2>
+        <div class="sub" id="reg-sub">เลือกบทบาทของคุณเพื่อเริ่มต้น</div>
+
+        <div class="step-bar">
+          <div class="step-dot on" data-step="1"><span>1</span>บทบาท</div>
+          <div class="step-dot" data-step="2"><span>2</span>ข้อมูลผู้เสียภาษี</div>
+          <div class="step-dot" data-step="3"><span>3</span>บัญชีและความยินยอม</div>
+        </div>
+
+        <div id="reg-err" class="error-msg hidden"></div>
+
+        <!-- ขั้นที่ 1 -->
+        <div id="reg-step-1">
+          <div class="field">
+            <label>คุณใช้งานระบบในฐานะใด</label>
+            <div class="role-stack">
+              <label class="role-card">
+                <input type="radio" name="role" value="creator" checked onchange="onRoleChange()">
+                <div><b>อินฟลูเอนเซอร์ / ผู้ผลิตเนื้อหา</b><small>ผู้รับจ้างผลิตเนื้อหา รับค่าจ้างและถูกหักภาษี ณ ที่จ่าย</small></div>
+              </label>
+              <label class="role-card">
+                <input type="radio" name="role" value="corporate" onchange="onRoleChange()">
+                <div><b>บริษัทผู้ว่าจ้าง (แบรนด์)</b><small>นิติบุคคลที่ว่าจ้างโดยตรง ออกใบกำกับภาษีและหนังสือรับรองหัก ณ ที่จ่าย</small></div>
+              </label>
+              <label class="role-card">
+                <input type="radio" name="role" value="agency" onchange="onRoleChange()">
+                <div><b>เอเจนซี่</b><small>ตัวกลางบริหารการจ้าง เป็นได้ทั้งนิติบุคคลและบุคคลธรรมดา</small></div>
+              </label>
+            </div>
+          </div>
+
+          <div class="field hidden" id="entity-field">
+            <label>ประเภทผู้เสียภาษีของเอเจนซี่</label>
+            <div class="seg">
+              <label><input type="radio" name="entityType" value="juristic" checked onchange="onEntityChange()"><span>นิติบุคคล</span></label>
+              <label><input type="radio" name="entityType" value="individual" onchange="onEntityChange()"><span>บุคคลธรรมดา / ฟรีแลนซ์</span></label>
+            </div>
+            <div class="hint">เลือกให้ตรงกับความเป็นจริง เพราะมีผลต่อเอกสารที่ต้องใช้ยืนยันตัวตนและอัตราภาษีหัก ณ ที่จ่าย</div>
+          </div>
+
+          <button type="button" class="btn btn-solid btn-block" onclick="gotoStep(2)">ถัดไป</button>
+          <div class="auth-switch">มีบัญชีอยู่แล้ว? <a onclick="showView('login')">เข้าสู่ระบบ</a></div>
+        </div>
+
+        <!-- ขั้นที่ 2 -->
+        <div id="reg-step-2" class="hidden">
+          <div class="field">
+            <label id="r-name-label">ชื่อ-นามสกุล *</label>
+            <input id="r-name" type="text" placeholder="เช่น นุสนีย์ มะแอเคียน">
+            <div class="hint" id="r-name-hint">ใช้ชื่อตามบัตรประชาชน เพราะต้องตรงกับชื่อบัญชีธนาคารที่รับเงิน</div>
+          </div>
+
+          <div class="field hidden" id="f-companytype">
+            <label>ประเภทนิติบุคคล *</label>
+            <select id="r-companytype"></select>
+          </div>
+
+          <div class="field">
+            <label id="r-taxid-label">เลขประจำตัวผู้เสียภาษี 13 หลัก *</label>
+            <input id="r-taxid" type="text" inputmode="numeric" maxlength="13" placeholder="กรอกตัวเลข 13 หลัก">
+            <div class="hint" id="r-taxid-hint"></div>
+          </div>
+
+          <div class="two hidden" id="f-branch">
+            <div class="field">
+              <label>สำนักงานใหญ่ / สาขา *</label>
+              <select id="r-branchtype" onchange="onBranchChange()">
+                <option value="head">สำนักงานใหญ่</option>
+                <option value="branch">สาขา</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>เลขที่สาขา (5 หลัก)</label>
+              <input id="r-branchcode" inputmode="numeric" maxlength="5" placeholder="เช่น 00001" disabled>
+            </div>
+          </div>
+          <div class="hint hidden" id="branch-hint" style="margin:-8px 0 14px">
+            ประมวลรัษฎากร มาตรา 86/4 บังคับให้ใบกำกับภาษีเต็มรูประบุว่าออกจากสำนักงานใหญ่หรือสาขาใด
+          </div>
+
+          <div class="field hidden" id="f-auth">
+            <label>กรรมการผู้มีอำนาจลงนาม *</label>
+            <input id="r-authname" placeholder="ชื่อตามหนังสือรับรองนิติบุคคล">
+            <input id="r-authpos" placeholder="ตำแหน่ง เช่น กรรมการผู้จัดการ" style="margin-top:8px">
+          </div>
+
+          <div class="field">
+            <label>สถานะภาษีมูลค่าเพิ่ม (VAT)</label>
+            <div class="seg">
+              <label><input type="radio" name="vat" value="no" checked onchange="onVatChange()"><span>ยังไม่ได้จดทะเบียน</span></label>
+              <label><input type="radio" name="vat" value="yes" onchange="onVatChange()"><span>จดทะเบียน VAT แล้ว</span></label>
+            </div>
+            <div class="hint" id="vat-hint"></div>
+          </div>
+
+          <div class="divider-label">ที่อยู่ตามที่จดทะเบียน (ต้องแสดงบนเอกสารภาษี)</div>
+          <div class="two">
+            <div class="field"><label>บ้านเลขที่ / อาคาร *</label><input id="r-addr-no" placeholder="เช่น 55/1"></div>
+            <div class="field"><label>ถนน</label><input id="r-addr-street" placeholder="เช่น สาทรใต้"></div>
+          </div>
+          <div class="two">
+            <div class="field"><label>แขวง / ตำบล *</label><input id="r-addr-sub"></div>
+            <div class="field"><label>เขต / อำเภอ *</label><input id="r-addr-dist"></div>
+          </div>
+          <div class="two">
+            <div class="field"><label>จังหวัด *</label><select id="r-addr-prov"></select></div>
+            <div class="field"><label>รหัสไปรษณีย์ *</label><input id="r-addr-post" inputmode="numeric" maxlength="5"></div>
+          </div>
+          <div class="field"><label>เบอร์ติดต่อ</label><input id="r-phone" placeholder="เช่น 02-111-2233">
+            <div class="hint">ใช้ติดต่อเรื่องเอกสารเท่านั้น ระบบส่งรหัส OTP ทางอีเมล ไม่ได้ส่งทาง SMS</div>
+          </div>
+
+          <div class="divider-label">บัญชีธนาคารสำหรับรับเงิน / คืนเงิน</div>
+          <div class="two">
+            <div class="field"><label>ธนาคาร</label><select id="r-bank-name"></select></div>
+            <div class="field"><label>เลขที่บัญชี</label><input id="r-bank-no" placeholder="เช่น 123-4-56789-0"></div>
+          </div>
+          <div class="field"><label>ชื่อบัญชี</label><input id="r-bank-acc" placeholder="ต้องตรงกับชื่อผู้ลงทะเบียน">
+            <div class="hint">ระบบแสดงเลขบัญชีแบบปิดบางส่วนในหน้าจอทั่วไป เปิดดูเต็มได้เฉพาะคุณกับผู้ตรวจสอบ</div>
+          </div>
+
+          <div class="btn-row" style="margin-top:4px">
+            <button type="button" class="btn btn-ghost" onclick="gotoStep(1)">← ย้อนกลับ</button>
+            <button type="button" class="btn btn-solid" style="flex:1" onclick="gotoStep(3)">ถัดไป</button>
+          </div>
+        </div>
+
+        <!-- ขั้นที่ 3 -->
+        <div id="reg-step-3" class="hidden">
+          <div class="field"><label>อีเมล *</label><input id="r-email" type="email" placeholder="you@example.com" autocomplete="username">
+            <div class="hint">ต้องเป็นอีเมลที่ใช้งานได้จริง เพราะระบบจะส่งรหัส OTP ไปยืนยันก่อนเปิดใช้งานบัญชี</div>
+          </div>
+          <div class="field"><label>รหัสผ่าน *</label><input id="r-pass" type="password" placeholder="อย่างน้อย 8 ตัวอักษร" autocomplete="new-password"></div>
+          <div class="field"><label>ยืนยันรหัสผ่าน *</label><input id="r-pass2" type="password" placeholder="กรอกรหัสผ่านอีกครั้ง" autocomplete="new-password"></div>
+
+          <div class="divider-label">ความยินยอมการใช้ข้อมูลส่วนบุคคล</div>
+          <div class="consent-intro">
+            ตาม พ.ร.บ.คุ้มครองข้อมูลส่วนบุคคล พ.ศ. 2562 มาตรา 19 ระบบแยกความยินยอมเป็นรายวัตถุประสงค์
+            คุณเลือกยินยอมเฉพาะบางข้อได้ และถอนความยินยอมข้อที่ไม่บังคับได้ทุกเมื่อที่หน้าโปรไฟล์ —
+            <a href="/privacy.html" target="_blank">อ่านนโยบายความเป็นส่วนตัวฉบับเต็ม</a>
+          </div>
+          <div id="consent-list"></div>
+
+          <div class="btn-row" style="margin-top:10px">
+            <button type="button" class="btn btn-ghost" onclick="gotoStep(2)">← ย้อนกลับ</button>
+            <button type="button" class="btn btn-solid" style="flex:1" onclick="doRegister()">สร้างบัญชี</button>
+          </div>
+          <div class="hint" style="margin-top:10px">
+            หลังยืนยันอีเมลแล้ว ระบบจะพาไปอัปโหลดเอกสารยืนยันตัวตนที่หน้าโปรไฟล์ (ทำภายหลังได้)
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/js/common.js"></script>
+<script>
+let OTP_CTX = null;          // { otpId, mode: 'login' | 'register' }
+let resendTimer = null;
+let META = null;
+let REG_STEP = 1;
+
+const $ = (id)=>document.getElementById(id);
+const val = (id)=>($(id)?$(id).value.trim():'');
+function showView(v){
+  $('login-view').classList.toggle('hidden', v!=='login');
+  $('otp-view').classList.toggle('hidden', v!=='otp');
+  $('register-view').classList.toggle('hidden', v!=='register');
+}
+function showErr(id,msg){const e=$(id);e.textContent=msg;e.classList.remove('hidden');e.scrollIntoView({block:'nearest',behavior:'smooth'});}
+function hideErr(id){$(id).classList.add('hidden');}
+
+/* ---------- โหลดข้อมูลประกอบฟอร์มจากเซิร์ฟเวอร์ ---------- */
+async function loadMeta(){
+  if (META) return META;
+  META = await api.get('/api/meta/profile-options');
+  $('r-addr-prov').innerHTML = '<option value="">— เลือกจังหวัด —</option>' + META.provinces.map(p=>`<option>${p}</option>`).join('');
+  $('r-companytype').innerHTML = META.companyTypes.map(c=>`<option>${c}</option>`).join('');
+  $('r-bank-name').innerHTML = '<option value="">— เลือกธนาคาร —</option>' + META.banks.map(b=>`<option>${b}</option>`).join('');
+  $('consent-list').innerHTML = META.consentPurposes.map(p=>`
+    <label class="consent-item">
+      <input type="checkbox" class="consent-cb" value="${p.key}" ${p.required?'checked':''}>
+      <div>
+        <b>${p.label} ${p.required?'<span class="req-tag">จำเป็น</span>':'<span class="opt-tag">เลือกได้</span>'}</b>
+        <small>${p.detail}</small>
+      </div>
+    </label>`).join('');
+  return META;
+}
+
+/* ---------- บทบาทและประเภทผู้เสียภาษี ---------- */
+function currentRole(){ return document.querySelector('input[name=role]:checked').value; }
+function currentEntity(){
+  const r = currentRole();
+  if (r==='corporate') return 'juristic';
+  if (r==='creator') return 'individual';
+  return document.querySelector('input[name=entityType]:checked').value;
+}
+function onRoleChange(){
+  $('entity-field').classList.toggle('hidden', currentRole()!=='agency');
+  applyEntityUI();
+}
+function onEntityChange(){ applyEntityUI(); }
+function applyEntityUI(){
+  const juristic = currentEntity()==='juristic';
+  ['f-companytype','f-branch','branch-hint','f-auth'].forEach(id=>$(id).classList.toggle('hidden', !juristic));
+  $('r-name-label').textContent = juristic ? 'ชื่อนิติบุคคล (ตามหนังสือรับรอง) *' : 'ชื่อ-นามสกุล *';
+  $('r-name').placeholder = juristic ? 'เช่น บริษัท แบรนด์ดี จำกัด' : 'เช่น นุสนีย์ มะแอเคียน';
+  $('r-name-hint').textContent = juristic
+    ? 'สะกดให้ตรงกับหนังสือรับรองนิติบุคคล เพราะชื่อนี้จะถูกพิมพ์ลงบนเอกสารภาษีทุกฉบับ'
+    : 'ใช้ชื่อตามบัตรประชาชน เพราะต้องตรงกับชื่อบัญชีธนาคารที่รับเงิน';
+  $('r-taxid-label').textContent = juristic
+    ? 'เลขทะเบียนนิติบุคคล / เลขประจำตัวผู้เสียภาษี 13 หลัก *'
+    : 'เลขประจำตัวผู้เสียภาษี 13 หลัก *';
+  $('r-taxid-hint').innerHTML = juristic
+    ? 'ดูได้จากหนังสือรับรองนิติบุคคล ระบบตรวจสอบหลักสุดท้ายด้วยสูตร check digit ให้อัตโนมัติ'
+    : 'บุคคลธรรมดาใช้เลขบัตรประชาชน 13 หลัก — ระบบเก็บเฉพาะตัวเลขนี้ <b>ไม่มีการขอสำเนาบัตรประชาชน</b> เพื่อเลี่ยงการเก็บข้อมูลอ่อนไหว (ศาสนา หมู่เลือด) ตาม PDPA มาตรา 26';
+}
+function onBranchChange(){
+  const isBranch = $('r-branchtype').value==='branch';
+  $('r-branchcode').disabled = !isBranch;
+  if(!isBranch) $('r-branchcode').value='';
+}
+function onVatChange(){
+  const yes = document.querySelector('input[name=vat]:checked').value==='yes';
+  $('vat-hint').textContent = yes
+    ? 'ระบบจะขอให้แนบใบทะเบียนภาษีมูลค่าเพิ่ม (ภ.พ.20) ตอนยืนยันตัวตน เพื่อเปิดสิทธิ์ออกใบกำกับภาษีเต็มรูป'
+    : 'ผู้ที่ยังไม่ได้จดทะเบียน VAT จะออก "ใบกำกับภาษี" ไม่ได้ตามมาตรา 86 แต่ยังออกใบเสร็จรับเงินและใบแจ้งหนี้ได้ตามปกติ';
+}
+
+/* ---------- ขั้นตอนการสมัคร ---------- */
+async function startRegister(){
+  await loadMeta();
+  onRoleChange(); onVatChange();
+  gotoStep(1); showView('register');
+}
+function gotoStep(n){
+  hideErr('reg-err');
+  if (n===3 && !validateStep2()) return;
+  REG_STEP = n;
+  [1,2,3].forEach(i=>$('reg-step-'+i).classList.toggle('hidden', i!==n));
+  document.querySelectorAll('.step-dot').forEach(d=>d.classList.toggle('on', Number(d.dataset.step)<=n));
+  const subs = {1:'เลือกบทบาทของคุณเพื่อเริ่มต้น',2:'กรอกข้อมูลที่กฎหมายบังคับให้แสดงบนเอกสารภาษี',3:'ตั้งค่าบัญชีและให้ความยินยอมการใช้ข้อมูล'};
+  $('reg-sub').textContent = subs[n];
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+// ตรวจ check digit ฝั่งหน้าเว็บ เพื่อบอกผู้ใช้ทันทีโดยไม่ต้องรอเซิร์ฟเวอร์
+function checkTaxId(id){
+  if(!/^\d{13}$/.test(id) || /^(\d)\1{12}$/.test(id)) return false;
+  let sum=0; for(let i=0;i<12;i++) sum += Number(id[i])*(13-i);
+  return ((11-(sum%11))%10) === Number(id[12]);
+}
+function validateStep2(){
+  const juristic = currentEntity()==='juristic';
+  if(!val('r-name')){ showErr('reg-err', juristic?'กรุณากรอกชื่อนิติบุคคล':'กรุณากรอกชื่อ-นามสกุล'); return false; }
+  const taxId = val('r-taxid').replace(/\D/g,'');
+  if(taxId.length!==13){ showErr('reg-err','เลขประจำตัวผู้เสียภาษีต้องมี 13 หลัก'); return false; }
+  if(!checkTaxId(taxId)){ showErr('reg-err','เลขประจำตัวผู้เสียภาษีไม่ถูกต้อง กรุณาตรวจสอบตัวเลขอีกครั้ง'); return false; }
+  if(juristic){
+    if($('r-branchtype').value==='branch' && val('r-branchcode').length!==5){ showErr('reg-err','กรุณาระบุเลขที่สาขา 5 หลัก'); return false; }
+    if(!val('r-authname')){ showErr('reg-err','กรุณากรอกชื่อกรรมการผู้มีอำนาจลงนาม'); return false; }
+  }
+  if(!val('r-addr-no')){ showErr('reg-err','กรุณากรอกบ้านเลขที่'); return false; }
+  if(!val('r-addr-sub')){ showErr('reg-err','กรุณากรอกแขวง/ตำบล'); return false; }
+  if(!val('r-addr-dist')){ showErr('reg-err','กรุณากรอกเขต/อำเภอ'); return false; }
+  if(!val('r-addr-prov')){ showErr('reg-err','กรุณาเลือกจังหวัด'); return false; }
+  if(val('r-addr-post').length!==5){ showErr('reg-err','รหัสไปรษณีย์ต้องมี 5 หลัก'); return false; }
+  return true;
+}
+function collectRegisterBody(){
+  const juristic = currentEntity()==='juristic';
+  const name = val('r-name');
+  return {
+    role: currentRole(), entityType: currentEntity(),
+    displayName: name,
+    companyName: juristic ? name : '',
+    companyType: juristic ? $('r-companytype').value : '',
+    authName: juristic ? val('r-authname') : '',
+    authPosition: juristic ? val('r-authpos') : '',
+    taxId: val('r-taxid').replace(/\D/g,''),
+    branchType: juristic ? $('r-branchtype').value : 'head',
+    branchCode: juristic ? val('r-branchcode') : '',
+    vatRegistered: document.querySelector('input[name=vat]:checked').value==='yes',
+    addr: {
+      no: val('r-addr-no'), street: val('r-addr-street'),
+      subdistrict: val('r-addr-sub'), district: val('r-addr-dist'),
+      province: val('r-addr-prov'), postcode: val('r-addr-post'),
+    },
+    phone: val('r-phone'),
+    bank: { bankName: $('r-bank-name').value, accountNo: val('r-bank-no'), accountName: val('r-bank-acc') },
+    email: val('r-email').toLowerCase(),
+    password: $('r-pass').value,
+    consent: Array.from(document.querySelectorAll('.consent-cb:checked')).map(c=>c.value),
+  };
+}
+async function doRegister(){
+  hideErr('reg-err');
+  const email = val('r-email'), pass = $('r-pass').value, pass2 = $('r-pass2').value;
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return showErr('reg-err','รูปแบบอีเมลไม่ถูกต้อง');
+  if(pass.length<8) return showErr('reg-err','รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร');
+  if(pass!==pass2) return showErr('reg-err','รหัสผ่านทั้งสองช่องไม่ตรงกัน');
+  const required = META.consentPurposes.filter(p=>p.required).map(p=>p.key);
+  const given = Array.from(document.querySelectorAll('.consent-cb:checked')).map(c=>c.value);
+  if(required.some(k=>!given.includes(k))) return showErr('reg-err','กรุณายินยอมในข้อที่จำเป็นต่อการให้บริการก่อน');
+  const {ok,data} = await api.post('/api/auth/register', collectRegisterBody());
+  if(!ok) return showErr('reg-err', data.error||'สมัครไม่สำเร็จ');
+  openOtpStep(data, 'register');
+}
+
+/* ---------- เข้าสู่ระบบ ---------- */
+async function doLogin(){
+  hideErr('login-err');
+  const email=val('l-email'), password=$('l-pass').value;
+  if(!email||!password) return showErr('login-err','กรุณากรอกอีเมลและรหัสผ่าน');
+  const {ok,data}=await api.post('/api/auth/login',{email,password});
+  if(!ok) return showErr('login-err',data.error||'เข้าสู่ระบบไม่สำเร็จ');
+  openOtpStep(data, data.pendingVerification ? 'register' : 'login');
+}
+
+/* ---------- ขั้นตอน OTP (ใช้ร่วมกันทั้งสมัครและเข้าสู่ระบบ) ---------- */
+function openOtpStep(data, mode){
+  OTP_CTX = { otpId: data.otpId, mode };
+  $('otp-title').textContent = mode==='register' ? 'ยืนยันอีเมลของคุณ' : 'ยืนยันตัวตนด้วย OTP';
+  $('otp-sub').innerHTML = mode==='register'
+    ? `ระบบส่งรหัสยืนยัน 6 หลักไปที่ <b>${data.emailMasked||''}</b> — กรอกเพื่อเปิดใช้งานบัญชี (รหัสมีอายุ 5 นาที)`
+    : `ระบบส่งรหัสยืนยัน 6 หลักไปที่ <b>${data.emailMasked||''}</b> — กรอกรหัสภายใน 5 นาที`;
+  const notice = $('otp-notice');
+  notice.classList.toggle('hidden', !data.notice);
+  if(data.notice) notice.textContent = data.notice;
+  $('otp-input').value=''; hideErr('otp-err');
+  $('otp-dev').classList.toggle('hidden', !data.devCode);
+  if(data.devCode) $('otp-dev-code').textContent = data.devCode;
+  showView('otp'); startResendCooldown();
+  setTimeout(()=>$('otp-input').focus(),50);
+}
+function backToLogin(){ clearInterval(resendTimer); OTP_CTX=null; showView('login'); }
+function startResendCooldown(sec=45){
+  let left=sec; const link=$('otp-resend-link'), cd=$('otp-cd');
+  link.classList.add('hidden'); clearInterval(resendTimer); cd.textContent=` (${left} วิ)`;
+  resendTimer=setInterval(()=>{
+    left--;
+    if(left<=0){clearInterval(resendTimer);cd.textContent='';link.classList.remove('hidden');}
+    else cd.textContent=` (${left} วิ)`;
+  },1000);
+}
+async function verifyOtp(){
+  if(!OTP_CTX) return backToLogin();
+  const code=val('otp-input');
+  if(!/^\d{6}$/.test(code)) return showErr('otp-err','กรุณากรอกรหัส 6 หลักให้ครบ');
+  const url = OTP_CTX.mode==='register' ? '/api/auth/register/verify-otp' : '/api/auth/login/verify-otp';
+  const {ok,data}=await api.post(url,{otpId:OTP_CTX.otpId, code});
+  if(!ok){ showErr('otp-err', data.error||'รหัสไม่ถูกต้อง'); $('otp-input').value=''; $('otp-input').focus(); return; }
+  const isNew = OTP_CTX.mode==='register';
+  location.href = homeFor(data.user.role) + (isNew && data.user.role!=='admin' ? '#profile' : '');
+}
+async function resendOtp(){
+  if(!OTP_CTX) return backToLogin();
+  const url = OTP_CTX.mode==='register' ? '/api/auth/register/resend-otp' : '/api/auth/login/resend-otp';
+  const {ok,data}=await api.post(url,{otpId:OTP_CTX.otpId});
+  if(!ok) return showErr('otp-err', data.error||'ส่งรหัสใหม่ไม่สำเร็จ');
+  $('otp-dev').classList.toggle('hidden', !data.devCode);
+  if(data.devCode) $('otp-dev-code').textContent=data.devCode;
+  toast('ส่งรหัสใหม่แล้ว กรุณาตรวจสอบอีเมล');
+  startResendCooldown();
+}
+
+/* ---------- ตัวช่วย ---------- */
+$('otp-input').addEventListener('input', e=>{ e.target.value=e.target.value.replace(/\D/g,'').slice(0,6); });
+['r-taxid','r-addr-post','r-branchcode'].forEach(id=>{
+  const el=$(id);
+  if(el) el.addEventListener('input', e=>{ e.target.value=e.target.value.replace(/\D/g,''); });
+});
+
+fetch('/api/auth/me').then(r=>r.ok?r.json():null).then(d=>{
+  if(d&&d.user) location.href = homeFor(d.user.role);
+});
+document.addEventListener('keydown',e=>{
+  if(e.key!=='Enter')return;
+  if(!$('login-view').classList.contains('hidden')) doLogin();
+  else if(!$('otp-view').classList.contains('hidden')) verifyOtp();
+  else if(!$('register-view').classList.contains('hidden')){
+    if(REG_STEP===3) doRegister(); else gotoStep(REG_STEP+1);
+  }
+});
+</script>
+<div class="auth-footlinks">
+  <a href="/overview.html">ภาพรวมระบบ</a>
+  <a href="/guide.html" style="color:var(--orange-deep)">คู่มือการใช้งาน</a>
+  <a href="/privacy.html">นโยบายความเป็นส่วนตัว</a>
+  <a href="/laws.html">กฎหมายที่เกี่ยวข้อง</a>
+</div>
+</body>
+</html>

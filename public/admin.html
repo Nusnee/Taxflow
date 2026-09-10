@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TaxFlow — ผู้ดูแลระบบ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Kanit:wght@500;600;700&family=Noto+Sans+Thai+Looped:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><img src="/img/logo.png" alt="TaxFlow" class="brand-logo"></div>
+    <div class="nav-group-label">ผู้ดูแลระบบ</div>
+    <button class="nav-item active" data-status="pending" onclick="loadList('pending', this)">รอตรวจสอบ<span class="ntf-badge hidden" id="cnt-pending" style="position:static;margin-left:auto">0</span></button>
+    <button class="nav-item" data-status="verified" onclick="loadList('verified', this)">ยืนยันแล้ว</button>
+    <button class="nav-item" data-status="rejected" onclick="loadList('rejected', this)">ไม่อนุมัติ</button>
+    <button class="nav-item" data-status="unverified" onclick="loadList('unverified', this)">ยังไม่ส่งเอกสาร</button>
+    <button class="nav-item" data-status="" onclick="loadList('', this)">ทั้งหมด</button>
+    <div class="nav-links-extra">
+      <a href="/privacy.html" target="_blank">นโยบายความเป็นส่วนตัว</a>
+      <a href="/laws.html" target="_blank">กฎหมายที่เกี่ยวข้อง</a>
+    </div>
+    <div class="sidebar-foot">
+      <div class="user-mini"><div class="avatar" id="u-av">A</div>
+        <div><div class="u-name" id="u-name">—</div><div class="u-email" id="u-email">—</div></div>
+      </div>
+      <button class="btn btn-ghost btn-sm btn-block" style="margin-top:10px" onclick="logout()">ออกจากระบบ</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="page-head">
+      <div class="eyebrow">การยืนยันตัวตน</div>
+      <h1 id="page-title">คำขอรอตรวจสอบ</h1>
+      <p>ตรวจสอบเอกสารที่ผู้ใช้ส่งมา แล้วอนุมัติหรือแจ้งเหตุผลที่ไม่อนุมัติ — ทุกครั้งที่เปิดดูเอกสารจะถูกบันทึกไว้ตาม PDPA</p>
+    </div>
+
+    <div class="note-box" style="margin-bottom:16px">
+      เอกสารยืนยันตัวตนเป็นข้อมูลส่วนบุคคล กรุณาเปิดดูเท่าที่จำเป็นต่อการตรวจสอบเท่านั้น
+      ระบบบันทึกผู้เปิดดู เวลา และเอกสารที่เปิดไว้ทุกครั้ง
+    </div>
+
+    <div class="two-col-wide">
+      <div class="panel">
+        <div class="panel-title">รายชื่อผู้ใช้</div>
+        <div id="user-list"><div class="muted">กำลังโหลด…</div></div>
+      </div>
+      <div class="panel" id="detail-panel">
+        <div class="panel-title">รายละเอียด</div>
+        <div class="muted">เลือกผู้ใช้จากรายการทางซ้ายเพื่อดูรายละเอียด</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="/js/common.js"></script>
+<script src="/js/admin.js"></script>
+</body>
+</html>

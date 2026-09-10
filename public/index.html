@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<title>TaxFlow</title>
+<script>
+fetch('/api/auth/me').then(r=>r.ok?r.json():null).then(d=>{
+  if(d&&d.user) location.replace(d.user.role==='creator'?'/creator.html':'/agency.html');
+  else location.replace('/login.html');
+}).catch(()=>location.replace('/login.html'));
+</script>
+</head>
+<body></body>
+</html>

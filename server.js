@@ -1,0 +1,1405 @@
+'use strict';
+/**
+ * server.js — เว็บเซิร์ฟเวอร์หลักของระบบ TaxFlow
+ * Node.js core + node:sqlite — รันด้วย `node server.js`
+ */
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+const store = require('./lib/store');
+const tax = require('./lib/tax');
+const auth = require('./lib/auth');
+const docview = require('./lib/docview');
+const qr = require('./lib/qr');
+const exporter = require('./lib/export');
+const otp = require('./lib/otp');
+const mailer = require('./lib/mailer');
+const profile = require('./lib/profile');
+const pdpa = require('./lib/pdpa');
+const thaiid = require('./lib/thaiid');
+const filestore = require('./lib/filestore');
+const { createRouter, readJsonBody, sendJson, sendHtml } = require('./lib/router');
+
+const PORT = process.env.PORT || 3000;
+const PUBLIC_DIR = path.join(__dirname, 'public');
+store.ensureReady();
+
+/* ---------- seed demo users ---------- */
+const SEED_USERS = [
+  {
+    role: 'creator', email: 'creator@taxflow.test', password: '123456',
+    displayName: 'นุสนีย์ มะแอเคียน', entityType: 'individual', taxId: '1100700123455',
+    addr: { no: '99/1', street: 'รามคำแหง', subdistrict: 'หัวหมาก', district: 'บางกะปิ', province: 'กรุงเทพมหานคร', postcode: '10240' },
+    phone: '081-234-5678', vatRegistered: false,
+    bank: { bankName: 'ธนาคารไทยพาณิชย์', accountNo: '987-6-54321-0', accountName: 'นุสนีย์ มะแอเคียน' },
+  },
+  {
+    role: 'corporate', email: 'brand@taxflow.test', password: '123456',
+    displayName: 'บริษัท แบรนด์ดี จำกัด', entityType: 'juristic',
+    companyName: 'บริษัท แบรนด์ดี จำกัด', companyType: 'บริษัทจำกัด', taxId: '0105561112235',
+    branchType: 'head', authName: 'สมชาย ใจดี', authPosition: 'กรรมการผู้จัดการ',
+    addr: { no: '55', street: 'สาทรใต้', subdistrict: 'ทุ่งมหาเมฆ', district: 'สาทร', province: 'กรุงเทพมหานคร', postcode: '10120' },
+    phone: '02-111-2233', vatRegistered: true, vatRegDate: '2562-04-01',
+    bank: { bankName: 'ธนาคารกสิกรไทย', accountNo: '012-3-45678-9', accountName: 'บริษัท แบรนด์ดี จำกัด' },
+  },
+  {
+    role: 'agency', email: 'agency@taxflow.test', password: '123456',
+    displayName: 'บริษัท มีเดีย เอเจนซี่ จำกัด', entityType: 'juristic',
+    companyName: 'บริษัท มีเดีย เอเจนซี่ จำกัด', companyType: 'บริษัทจำกัด', taxId: '0105550001232',
+    branchType: 'head', authName: 'วิภาดา ทองแท้', authPosition: 'กรรมการผู้มีอำนาจ',
+    addr: { no: '123', street: 'สุขุมวิท', subdistrict: 'คลองเตยเหนือ', district: 'วัฒนา', province: 'กรุงเทพมหานคร', postcode: '10110' },
+    phone: '02-999-8877', vatRegistered: true, vatRegDate: '2560-01-15',
+    bank: { bankName: 'ธนาคารกรุงไทย', accountNo: '222-3-44455-6', accountName: 'บริษัท มีเดีย เอเจนซี่ จำกัด' },
+  },
+  {
+    role: 'admin', email: 'admin@taxflow.test', password: '123456',
+    displayName: 'ผู้ดูแลระบบ TaxFlow', entityType: 'individual', taxId: '',
+  },
+];
+
+// สมุดคู่ค้าตัวอย่าง (จะถูกผูกกับผู้ใช้ตาม email ตอน seed)
+const SEED_CONTACTS = {
+  'agency@taxflow.test': [
+    { name: 'บริษัท แบรนด์ดี จำกัด', taxId: '0105561112235', kind: 'buyer', email: 'ap@branddee.co.th', phone: '02-111-2233', address: '55 ถ.สาทรใต้ กรุงเทพฯ', bank: 'กสิกรไทย 012-3-45678-9', note: 'ลูกค้าหลัก แคมเปญรายไตรมาส' },
+    { name: 'นุสนีย์ มะแอเคียน', taxId: '1100700123455', kind: 'payee', email: 'nusnee@example.com', phone: '081-234-5678', address: '99/1 ถ.รามคำแหง กรุงเทพฯ', bank: 'ไทยพาณิชย์ 987-6-54321-0', note: 'อินฟลูสายอาหาร ค่าตัว 15,000/คลิป' },
+    { name: 'วลัยลักษณ์ ศรีสวัสดิ์', taxId: '1100700654329', kind: 'payee', email: 'walailak@example.com', phone: '089-876-5432', address: 'เชียงใหม่', bank: 'กรุงเทพ 111-2-33344-5', note: 'อินฟลูสายท่องเที่ยว' },
+  ],
+  'brand@taxflow.test': [
+    { name: 'บริษัท มีเดีย เอเจนซี่ จำกัด', taxId: '0105550001232', kind: 'payee', email: 'billing@mediaagency.co.th', phone: '02-999-8877', address: '123 ถ.สุขุมวิท กรุงเทพฯ', bank: 'กรุงไทย 222-3-44455-6', note: 'เอเจนซี่คู่สัญญาหลัก' },
+  ],
+  'creator@taxflow.test': [
+    { name: 'บริษัท มีเดีย เอเจนซี่ จำกัด', taxId: '0105550001232', kind: 'payer', email: 'hr@mediaagency.co.th', phone: '02-999-8877', address: '123 ถ.สุขุมวิท กรุงเทพฯ', bank: '', note: 'ผู้ว่าจ้างประจำ จ่ายทุกสิ้นเดือน' },
+  ],
+};
+
+function seedUsers() {
+  if (store.count('users') > 0) return [];
+  const created = [];
+  for (const u of SEED_USERS) {
+    const { password, ...rest } = u;
+    const base = profile.defaults(u.role);
+    const record = {
+      ...base, ...rest,
+      passwordHash: auth.hashPassword(password),
+      emailVerified: true,
+      verifyStatus: u.role === 'admin' ? 'verified' : 'verified',
+      verifiedAt: new Date().toISOString(),
+      addr: profile.normalizeAddress(u.addr || {}),
+      consent: pdpa.makeConsentRecord(pdpa.PURPOSES.map((x) => x.key)),
+    };
+    record.address = profile.formatAddress(record.addr);
+    const user = store.insert('users', record);
+    store.insert('consents', {
+      userId: user.id, version: pdpa.CONSENT_VERSION,
+      purposes: pdpa.PURPOSES.map((x) => x.key), action: 'seed', at: new Date().toISOString(),
+    });
+    for (const c of (SEED_CONTACTS[u.email] || [])) {
+      store.insert('contacts', { userId: user.id, ...c });
+    }
+    created.push(u);
+  }
+  return created;
+}
+
+const publicUser = (u) => { if (!u) return null; const { passwordHash, ...r } = u; return r; };
+// ปิดบางส่วนของอีเมลก่อนแสดงผลตอนขอ OTP เช่น na****@gmail.com
+function maskEmail(email) {
+  const s = String(email || '');
+  const i = s.indexOf('@');
+  if (i < 1) return s;
+  const user = s.slice(0, i);
+  const domain = s.slice(i);
+  const keep = Math.min(2, user.length);
+  return user.slice(0, keep) + '*'.repeat(Math.max(1, user.length - keep)) + domain;
+}
+function currentUser(req) {
+  const payload = auth.verifyToken(auth.parseCookies(req).tf_session);
+  return payload ? store.find('users', payload.uid) : null;
+}
+function requireAuth(handler) {
+  return (req, res) => {
+    const user = currentUser(req);
+    if (!user) return sendJson(res, 401, { error: 'กรุณาเข้าสู่ระบบ' });
+    req.user = user;
+    return handler(req, res);
+  };
+}
+
+/* ---------- helpers: numbering, validation, audit, versions, notify ---------- */
+const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+const PREFIX = { ETAX: 'TAX', EWHT: 'WHT', WHT: 'WHT', RECEIPT: 'RCP', INVOICE: 'INV', QUOTATION: 'QTN', PO: 'PO', DELIVERY: 'DLV', PAYMENT: 'PAY', CONTRACT_INF: 'CTR', CONTRACT_BRAND: 'CTB', POA: 'POA' };
+
+function makeDocNo(type, userId) {
+  const seq = store.nextDocNumber(userId, type);
+  return `${PREFIX[type] || 'DOC'}-${new Date().getFullYear()}-${String(seq).padStart(5, '0')}`;
+}
+
+// ตรวจสอบความครบถ้วนของข้อมูลเอกสาร
+function validateDocument(type, body) {
+  const errors = [];
+  if (type === 'ETAX') {
+    if (!body.buyer) errors.push('กรุณาระบุชื่อผู้ซื้อ/ผู้ว่าจ้าง');
+    const items = Array.isArray(body.items) ? body.items.filter((i) => i.name || i.price) : [];
+    if (!items.length) errors.push('กรุณาเพิ่มรายการอย่างน้อย 1 รายการ');
+    if (items.some((i) => !i.name)) errors.push('มีรายการที่ไม่ได้ระบุชื่อ');
+    if (items.some((i) => !(Number(i.price) > 0))) errors.push('มีรายการที่ราคาไม่ถูกต้อง');
+  } else {
+    if (!body.amount || !(Number(body.amount) > 0)) errors.push('กรุณาระบุยอดเงินให้ถูกต้อง');
+    if (type === 'EWHT' && !body.payee) errors.push('กรุณาระบุชื่อผู้รับเงิน');
+    if (type === 'WHT' && !body.payer) errors.push('กรุณาระบุชื่อผู้จ่ายเงิน');
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+function snapshotVersion(doc, actorName, note) {
+  const existing = store.all('doc_versions', (v) => v.docId === doc.id).length;
+  store.insert('doc_versions', {
+    docId: doc.id, version: existing + 1, editor: actorName, note: note || '',
+    snapshot: doc, at: new Date().toISOString(),
+  });
+}
+function logAudit(userId, docId, action, detail, actorName) {
+  store.insert('audit_log', { userId, docId: docId || null, action, detail: detail || '', actor: actorName || '', at: new Date().toISOString() });
+}
+function notify(userId, type, message, docId, extra = {}) {
+  store.insert('notifications', { userId, kind: type, message, docId: docId || null, read: false, at: new Date().toISOString(), ...extra });
+}
+
+const STATUS_FLOW = {
+  draft: ['approved', 'pending', 'cancelled'],
+  pending: ['approved', 'rejected', 'cancelled'],
+  approved: ['archived', 'cancelled'],
+  rejected: ['draft', 'cancelled'],
+  cancelled: [],
+  archived: [],
+};
+const STATUS_LABEL = { draft: 'แบบร่าง', pending: 'รอตรวจสอบ', approved: 'อนุมัติ', rejected: 'ไม่อนุมัติ', cancelled: 'ยกเลิก', archived: 'เก็บถาวร' };
+
+const api = createRouter();
+
+/* =========================================================
+ *  META / AUTH
+ * ========================================================= */
+api.get('/api/health', (req, res) => sendJson(res, 200, { status: 'ok', time: new Date().toISOString() }));
+
+/* ---------- ค่าคงที่สำหรับไฟล์โปรไฟล์/เอกสารยืนยันตัวตน ---------- */
+const KYC_MIME = { 'application/pdf': 'pdf', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+const KYC_MAX = 5 * 1024 * 1024;
+const IMG_MIME = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+const IMG_MAX = 1 * 1024 * 1024;
+
+function requireAdmin(handler) {
+  return requireAuth((req, res) => {
+    if (req.user.role !== 'admin') return sendJson(res, 403, { error: 'เฉพาะผู้ดูแลระบบเท่านั้น' });
+    return handler(req, res);
+  });
+}
+
+/* =========================================================
+ *  สมัครสมาชิก — เก็บข้อมูลตามบทบาท + ความยินยอม PDPA + ยืนยันอีเมลด้วย OTP
+ *  บัญชีจะยังใช้งานไม่ได้จนกว่าจะยืนยันรหัส OTP ที่ส่งไปทางอีเมล
+ * ========================================================= */
+api.post('/api/auth/register', async (req, res) => {
+  const b = await readJsonBody(req);
+  const email = String(b.email || '').trim().toLowerCase();
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return sendJson(res, 400, { error: 'รูปแบบอีเมลไม่ถูกต้อง' });
+  if (!b.password) return sendJson(res, 400, { error: 'กรุณากรอกรหัสผ่าน' });
+  if (String(b.password).length < 8) return sendJson(res, 400, { error: 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร' });
+  if (store.findOne('users', (u) => u.email === email)) return sendJson(res, 409, { error: 'อีเมลนี้ถูกใช้แล้ว' });
+
+  // ห้ามสมัครเป็นผู้ดูแลระบบผ่านหน้าลงทะเบียน
+  const role = ['agency', 'corporate', 'creator'].includes(b.role) ? b.role : 'creator';
+
+  // ความยินยอมตาม PDPA — ต้องยินยอมข้อที่จำเป็นก่อนจึงจะสร้างบัญชีได้
+  const consentCheck = pdpa.validateConsent(b.consent);
+  if (!consentCheck.ok) return sendJson(res, 400, { error: consentCheck.error });
+
+  // ประกอบข้อมูลโปรไฟล์ตามบทบาท
+  const draft = { ...profile.defaults(role), role, email };
+  const { patch, errors } = profile.buildPatch(draft, b);
+  if (errors.length) return sendJson(res, 400, { error: errors[0], errors });
+
+  const name = patch.entityType === 'juristic' ? patch.companyName : patch.displayName;
+  if (!name) return sendJson(res, 400, { error: patch.entityType === 'juristic' ? 'กรุณากรอกชื่อนิติบุคคล' : 'กรุณากรอกชื่อ-นามสกุล' });
+  if (!patch.taxId) return sendJson(res, 400, { error: 'กรุณากรอกเลขประจำตัวผู้เสียภาษี 13 หลัก' });
+  if (store.findOne('users', (u) => u.taxId && u.taxId === patch.taxId)) {
+    return sendJson(res, 409, { error: 'เลขประจำตัวผู้เสียภาษีนี้ถูกใช้ลงทะเบียนแล้ว' });
+  }
+
+  const consentRecord = pdpa.makeConsentRecord(consentCheck.purposes);
+  const user = store.insert('users', {
+    ...draft, ...patch,
+    passwordHash: auth.hashPassword(b.password),
+    emailVerified: false,
+    consent: consentRecord,
+  });
+  store.insert('consents', {
+    userId: user.id, version: consentRecord.version, purposes: consentRecord.purposes,
+    action: 'register', at: consentRecord.at,
+  });
+
+  const { id: otpId, code } = otp.createOtp(user.id, 'register', null, 'email');
+  const mailResult = await mailer.sendOtpEmail(user.email, { code, purpose: 'register', displayName: user.displayName });
+  logAudit(user.id, null, 'register', 'สร้างบัญชีใหม่ รอยืนยันอีเมล', user.displayName);
+
+  sendJson(res, 201, {
+    pendingVerification: true, otpId, emailMasked: maskEmail(user.email),
+    ...(mailResult.dev ? { devCode: code } : {}),
+  });
+});
+
+// ยืนยันอีเมลตอนสมัคร แล้วจึงเปิดใช้งานบัญชีและออก session
+api.post('/api/auth/register/verify-otp', async (req, res) => {
+  const b = await readJsonBody(req);
+  const result = otp.verify(b.otpId, b.code, { purpose: 'register' });
+  if (!result.ok) return sendJson(res, 400, { error: result.error });
+  const user = store.find('users', result.otp.userId);
+  if (!user) return sendJson(res, 404, { error: 'ไม่พบบัญชีผู้ใช้' });
+  const updated = store.update('users', user.id, { emailVerified: true, emailVerifiedAt: new Date().toISOString() });
+  auth.setSessionCookie(res, auth.createToken({ uid: user.id, role: user.role }));
+  logAudit(user.id, null, 'verify-email', 'ยืนยันอีเมลสำเร็จ บัญชีพร้อมใช้งาน', user.displayName);
+  sendJson(res, 200, { user: publicUser(updated) });
+});
+
+api.post('/api/auth/register/resend-otp', async (req, res) => {
+  const b = await readJsonBody(req);
+  const row = store.find('otp_codes', b.otpId);
+  if (!row || row.purpose !== 'register') return sendJson(res, 404, { error: 'ไม่พบรายการยืนยันอีเมลนี้ กรุณาสมัครใหม่อีกครั้ง' });
+  const r = otp.regenerate(b.otpId);
+  if (!r) return sendJson(res, 400, { error: 'ไม่สามารถขอรหัสใหม่ได้ กรุณาสมัครใหม่อีกครั้ง' });
+  if (r.throttled) return sendJson(res, 429, { error: `กรุณารออีก ${r.waitSec} วินาทีก่อนขอรหัสใหม่` });
+  const user = store.find('users', row.userId);
+  const mailResult = await mailer.sendOtpEmail(user.email, { code: r.code, purpose: 'register', displayName: user.displayName });
+  sendJson(res, 200, { otpId: b.otpId, ...(mailResult.dev ? { devCode: r.code } : {}) });
+});
+
+/* ---------- เข้าสู่ระบบ (ขั้นที่ 1: ตรวจอีเมล/รหัสผ่าน แล้วส่ง OTP) ---------- */
+api.post('/api/auth/login', async (req, res) => {
+  const b = await readJsonBody(req);
+  const email = String(b.email || '').trim().toLowerCase();
+  const user = store.findOne('users', (u) => u.email === email);
+  if (!user || !auth.verifyPassword(b.password, user.passwordHash)) return sendJson(res, 401, { error: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' });
+
+  // บัญชีที่ยังไม่ได้ยืนยันอีเมล ให้กลับไปทำขั้นตอนยืนยันอีเมลให้เสร็จก่อน
+  if (!user.emailVerified) {
+    const { id: otpId, code } = otp.createOtp(user.id, 'register', null, 'email');
+    const mailResult = await mailer.sendOtpEmail(user.email, { code, purpose: 'register', displayName: user.displayName });
+    return sendJson(res, 200, {
+      pendingVerification: true, otpId, emailMasked: maskEmail(user.email),
+      notice: 'บัญชีนี้ยังไม่ได้ยืนยันอีเมล ระบบได้ส่งรหัสยืนยันไปให้ใหม่แล้ว',
+      ...(mailResult.dev ? { devCode: code } : {}),
+    });
+  }
+
+  const { id: otpId, code } = otp.createOtp(user.id, 'login', null, 'email');
+  const mailResult = await mailer.sendOtpEmail(user.email, { code, purpose: 'login', displayName: user.displayName });
+  logAudit(user.id, null, 'login-otp-sent', `ส่งรหัส OTP เข้าสู่ระบบไปที่ ${user.email}`, user.displayName);
+  sendJson(res, 200, {
+    otpRequired: true, otpId, emailMasked: maskEmail(user.email),
+    ...(mailResult.dev ? { devCode: code } : {}),
+  });
+});
+
+// ขั้นตอนที่ 2: ยืนยันรหัส OTP แล้วจึงออก session cookie จริง
+api.post('/api/auth/login/verify-otp', async (req, res) => {
+  const b = await readJsonBody(req);
+  const result = otp.verify(b.otpId, b.code, { purpose: 'login' });
+  if (!result.ok) return sendJson(res, 400, { error: result.error });
+  const user = store.find('users', result.otp.userId);
+  if (!user) return sendJson(res, 404, { error: 'ไม่พบบัญชีผู้ใช้' });
+  auth.setSessionCookie(res, auth.createToken({ uid: user.id, role: user.role }));
+  logAudit(user.id, null, 'login', 'เข้าสู่ระบบสำเร็จ (ยืนยันด้วย OTP)', user.displayName);
+  sendJson(res, 200, { user: publicUser(user) });
+});
+
+// ขอรหัส OTP เข้าสู่ระบบใหม่ (กด "ส่งรหัสอีกครั้ง")
+api.post('/api/auth/login/resend-otp', async (req, res) => {
+  const b = await readJsonBody(req);
+  const row = store.find('otp_codes', b.otpId);
+  if (!row || row.purpose !== 'login') return sendJson(res, 404, { error: 'ไม่พบรายการ OTP นี้ กรุณาเข้าสู่ระบบใหม่อีกครั้ง' });
+  const r = otp.regenerate(b.otpId);
+  if (!r) return sendJson(res, 400, { error: 'ไม่สามารถขอรหัสใหม่ได้ กรุณาเข้าสู่ระบบใหม่อีกครั้ง' });
+  if (r.throttled) return sendJson(res, 429, { error: `กรุณารออีก ${r.waitSec} วินาทีก่อนขอรหัสใหม่` });
+  const user = store.find('users', row.userId);
+  const mailResult = await mailer.sendOtpEmail(user.email, { code: r.code, purpose: 'login', displayName: user.displayName });
+  sendJson(res, 200, { otpId: b.otpId, ...(mailResult.dev ? { devCode: r.code } : {}) });
+});
+
+api.post('/api/auth/logout', (req, res) => { auth.clearSessionCookie(res); sendJson(res, 200, { ok: true }); });
+api.get('/api/auth/me', (req, res) => {
+  const user = currentUser(req);
+  if (!user) return sendJson(res, 401, { error: 'ยังไม่ได้เข้าสู่ระบบ' });
+  sendJson(res, 200, { user: publicUser(user), profile: profileMeta(user) });
+});
+
+/* =========================================================
+ *  โปรไฟล์ตามบทบาท
+ * ========================================================= */
+
+// ข้อมูลประกอบสำหรับสร้างฟอร์ม (รายการจังหวัด ธนาคาร ประเภทนิติบุคคล ฯลฯ)
+api.get('/api/meta/profile-options', (req, res) => sendJson(res, 200, {
+  companyTypes: profile.COMPANY_TYPES,
+  provinces: profile.PROVINCES,
+  banks: profile.BANKS,
+  kycTypes: profile.KYC_TYPES,
+  roleLabels: profile.ROLE_LABEL,
+  consentPurposes: pdpa.PURPOSES,
+  consentVersion: pdpa.CONSENT_VERSION,
+}));
+
+function profileMeta(user) {
+  const c = profile.completeness(user);
+  return {
+    completeness: c,
+    isJuristic: profile.isJuristic(user),
+    branchLabel: profile.branchLabel(user),
+    requiredKyc: profile.requiredKyc(user),
+    canIssueEtax: !!user.vatRegistered,
+  };
+}
+
+api.put('/api/auth/profile', requireAuth(async (req, res) => {
+  const b = await readJsonBody(req);
+  const { patch, errors } = profile.buildPatch(req.user, b);
+  if (errors.length) return sendJson(res, 400, { error: errors[0], errors });
+
+  // เลขประจำตัวผู้เสียภาษีต้องไม่ซ้ำกับบัญชีอื่น
+  if (patch.taxId && store.findOne('users', (u) => u.id !== req.user.id && u.taxId === patch.taxId)) {
+    return sendJson(res, 409, { error: 'เลขประจำตัวผู้เสียภาษีนี้ถูกใช้โดยบัญชีอื่นแล้ว' });
+  }
+
+  // ถ้าแก้ข้อมูลสำคัญหลังผ่านการตรวจสอบแล้ว ต้องกลับไปรอตรวจสอบใหม่
+  const critical = ['taxId', 'companyName', 'displayName', 'entityType', 'vatRegistered'];
+  const changedCritical = critical.some((k) => JSON.stringify(patch[k]) !== undefined && patch[k] !== undefined && JSON.stringify(patch[k]) !== JSON.stringify(req.user[k]));
+  const extra = {};
+  if (changedCritical && req.user.verifyStatus === 'verified') {
+    extra.verifyStatus = 'pending';
+    extra.verifyNote = 'ข้อมูลสำคัญถูกแก้ไข ระบบส่งกลับไปตรวจสอบอีกครั้งโดยอัตโนมัติ';
+  }
+
+  const u = store.update('users', req.user.id, { ...patch, ...extra });
+  logAudit(req.user.id, null, 'profile-update', 'แก้ไขข้อมูลโปรไฟล์', req.user.displayName);
+  sendJson(res, 200, { user: publicUser(u), profile: profileMeta(u) });
+}));
+
+/* ---------- โลโก้และตราประทับสำหรับพิมพ์บนเอกสาร ---------- */
+api.post('/api/auth/brand-image', requireAuth(async (req, res) => {
+  const b = await readJsonBody(req);
+  const kind = b.kind === 'seal' ? 'seal' : 'logo';
+  if (!b.dataBase64) return sendJson(res, 400, { error: 'ไม่พบไฟล์รูปภาพ' });
+  if (!IMG_MIME[b.mime]) return sendJson(res, 415, { error: 'รองรับเฉพาะไฟล์ PNG, JPG, WEBP เท่านั้น' });
+  const buf = Buffer.from(b.dataBase64, 'base64');
+  if (buf.length > IMG_MAX) return sendJson(res, 413, { error: 'ไฟล์รูปภาพต้องมีขนาดไม่เกิน 1 MB' });
+
+  const field = kind === 'seal' ? 'sealFile' : 'logoFile';
+  const old = req.user[field];
+  if (old && old.storedName) filestore.removeFile(store.UPLOAD_DIR, old.storedName);
+
+  const storedName = 'brand_' + crypto.randomBytes(12).toString('hex') + '.' + IMG_MIME[b.mime];
+  fs.writeFileSync(path.join(store.UPLOAD_DIR, storedName), buf);
+  const meta = { storedName, mime: b.mime, size: buf.length, filename: String(b.filename || '').slice(0, 120), at: new Date().toISOString() };
+  const u = store.update('users', req.user.id, { [field]: meta });
+  logAudit(req.user.id, null, 'brand-image', kind === 'seal' ? 'อัปโหลดตราประทับบริษัท' : 'อัปโหลดโลโก้บริษัท', req.user.displayName);
+  sendJson(res, 201, { user: publicUser(u), kind });
+}));
+
+api.delete('/api/auth/brand-image/:kind', requireAuth((req, res) => {
+  const kind = req.params.kind === 'seal' ? 'seal' : 'logo';
+  const field = kind === 'seal' ? 'sealFile' : 'logoFile';
+  const cur = req.user[field];
+  if (cur && cur.storedName) filestore.removeFile(store.UPLOAD_DIR, cur.storedName);
+  const u = store.update('users', req.user.id, { [field]: null });
+  sendJson(res, 200, { user: publicUser(u) });
+}));
+
+api.get('/api/auth/brand-image/:kind', requireAuth((req, res) => {
+  const kind = req.params.kind === 'seal' ? 'seal' : 'logo';
+  const meta = req.user[kind === 'seal' ? 'sealFile' : 'logoFile'];
+  if (!meta) return sendJson(res, 404, { error: 'ยังไม่ได้อัปโหลดรูปภาพนี้' });
+  try {
+    const buf = fs.readFileSync(path.join(store.UPLOAD_DIR, meta.storedName));
+    res.writeHead(200, { 'Content-Type': meta.mime, 'Cache-Control': 'no-store', 'Content-Length': buf.length });
+    res.end(buf);
+  } catch { sendJson(res, 404, { error: 'ไม่พบไฟล์รูปภาพ' }); }
+}));
+
+/* =========================================================
+ *  เอกสารยืนยันตัวตน (KYC) — จัดเก็บแบบเข้ารหัส
+ *  ระบบไม่ขอสำเนาบัตรประชาชน เก็บเฉพาะเลข 13 หลักเท่านั้น
+ * ========================================================= */
+api.get('/api/kyc', requireAuth((req, res) => {
+  const items = store.all('kyc_documents', (k) => k.userId === req.user.id)
+    .map(({ storedName, ...rest }) => rest).reverse();
+  const required = profile.requiredKyc(req.user).map((r) => ({
+    ...r, ...profile.KYC_TYPES[r.type],
+    uploaded: items.find((i) => i.docType === r.type) || null,
+  }));
+  sendJson(res, 200, {
+    items, required,
+    verifyStatus: req.user.verifyStatus || 'unverified',
+    verifyNote: req.user.verifyNote || '',
+    kycConsent: !!(req.user.consent && (req.user.consent.purposes || []).includes('kyc')),
+  });
+}));
+
+api.post('/api/kyc', requireAuth(async (req, res) => {
+  const b = await readJsonBody(req);
+  if (!profile.KYC_TYPES[b.docType]) return sendJson(res, 400, { error: 'ประเภทเอกสารไม่ถูกต้อง' });
+  if (!(req.user.consent && (req.user.consent.purposes || []).includes('kyc'))) {
+    return sendJson(res, 403, { error: 'กรุณาให้ความยินยอมการจัดเก็บเอกสารยืนยันตัวตนก่อน (ตั้งค่าได้ที่หน้าโปรไฟล์ หัวข้อความเป็นส่วนตัว)' });
+  }
+  if (!b.dataBase64) return sendJson(res, 400, { error: 'ไม่พบไฟล์' });
+  if (!KYC_MIME[b.mime]) return sendJson(res, 415, { error: 'รองรับเฉพาะไฟล์ PDF, PNG, JPG, WEBP เท่านั้น' });
+  const buf = Buffer.from(b.dataBase64, 'base64');
+  if (!buf.length) return sendJson(res, 400, { error: 'ไฟล์เสียหายหรือว่างเปล่า' });
+  if (buf.length > KYC_MAX) return sendJson(res, 413, { error: 'ไฟล์มีขนาดเกิน 5 MB' });
+
+  // อัปโหลดซ้ำประเภทเดิม = แทนที่ของเดิม
+  const old = store.findOne('kyc_documents', (k) => k.userId === req.user.id && k.docType === b.docType);
+  if (old) { filestore.removeFile(store.UPLOAD_DIR, old.storedName); store.remove('kyc_documents', old.id); }
+
+  const storedName = filestore.writeEncrypted(store.UPLOAD_DIR, buf, KYC_MIME[b.mime]);
+  const row = store.insert('kyc_documents', {
+    userId: req.user.id, docType: b.docType,
+    filename: String(b.filename || '').slice(0, 160), mime: b.mime, size: buf.length,
+    storedName, status: 'pending', note: '',
+  });
+  logAudit(req.user.id, null, 'kyc-upload', `อัปโหลด${profile.KYC_TYPES[b.docType].label} (จัดเก็บแบบเข้ารหัส)`, req.user.displayName);
+  const { storedName: _sn, ...meta } = row;
+  sendJson(res, 201, meta);
+}));
+
+api.get('/api/kyc/:id/file', requireAuth((req, res) => {
+  const row = store.find('kyc_documents', req.params.id);
+  const isOwner = row && row.userId === req.user.id;
+  const isReviewer = req.user.role === 'admin';
+  if (!row || (!isOwner && !isReviewer)) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
+  try {
+    const buf = filestore.readEncrypted(store.UPLOAD_DIR, row.storedName);
+    // PDPA: บันทึกทุกครั้งที่มีการเปิดดูเอกสารยืนยันตัวตน โดยเฉพาะเมื่อผู้ตรวจสอบเป็นผู้เปิด
+    logAudit(row.userId, null, 'kyc-view',
+      `เปิดดู${profile.KYC_TYPES[row.docType] ? profile.KYC_TYPES[row.docType].label : row.docType}` +
+      (isReviewer && !isOwner ? ' โดยผู้ตรวจสอบ' : ' โดยเจ้าของบัญชี'), req.user.displayName);
+    res.writeHead(200, { 'Content-Type': row.mime, 'Cache-Control': 'no-store', 'Content-Length': buf.length });
+    res.end(buf);
+  } catch {
+    sendJson(res, 500, { error: 'เปิดไฟล์ไม่สำเร็จ ไฟล์อาจเสียหายหรือคีย์เข้ารหัสไม่ตรงกัน' });
+  }
+}));
+
+api.delete('/api/kyc/:id', requireAuth((req, res) => {
+  const row = store.find('kyc_documents', req.params.id);
+  if (!row || row.userId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
+  filestore.removeFile(store.UPLOAD_DIR, row.storedName);
+  store.remove('kyc_documents', row.id);
+  logAudit(req.user.id, null, 'kyc-delete', 'ลบเอกสารยืนยันตัวตน', req.user.displayName);
+  sendJson(res, 200, { ok: true });
+}));
+
+// ส่งเอกสารให้ผู้ดูแลระบบตรวจสอบ
+api.post('/api/kyc/submit', requireAuth((req, res) => {
+  const required = profile.requiredKyc(req.user).filter((r) => r.required);
+  const owned = store.all('kyc_documents', (k) => k.userId === req.user.id);
+  const missing = required.filter((r) => !owned.some((o) => o.docType === r.type))
+    .map((r) => profile.KYC_TYPES[r.type].label);
+  if (missing.length) return sendJson(res, 400, { error: 'ยังขาดเอกสาร: ' + missing.join(', ') });
+  const c = profile.completeness(req.user);
+  if (!c.ok) return sendJson(res, 400, { error: 'ข้อมูลโปรไฟล์ยังไม่ครบ — ขาด: ' + c.missing.join(', ') });
+
+  const u = store.update('users', req.user.id, { verifyStatus: 'pending', verifyNote: '', submittedAt: new Date().toISOString() });
+  logAudit(req.user.id, null, 'kyc-submit', 'ส่งเอกสารยืนยันตัวตนให้ผู้ดูแลระบบตรวจสอบ', req.user.displayName);
+  for (const admin of store.all('users', (x) => x.role === 'admin')) {
+    notify(admin.id, 'kyc', `มีคำขอยืนยันตัวตนใหม่จาก ${u.companyName || u.displayName}`, null);
+  }
+  sendJson(res, 200, { user: publicUser(u) });
+}));
+
+/* =========================================================
+ *  ผู้ดูแลระบบ — ตรวจสอบและอนุมัติการยืนยันตัวตน
+ * ========================================================= */
+api.get('/api/admin/users', requireAdmin((req, res) => {
+  const status = new URL(req.url, 'http://localhost').searchParams.get('status');
+  let list = store.all('users', (u) => u.role !== 'admin');
+  if (status) list = list.filter((u) => (u.verifyStatus || 'unverified') === status);
+  const items = list.map((u) => ({
+    id: u.id, email: u.email, role: u.role, entityType: u.entityType,
+    displayName: u.displayName, companyName: u.companyName,
+    taxId: u.taxId, vatRegistered: !!u.vatRegistered,
+    verifyStatus: u.verifyStatus || 'unverified', verifyNote: u.verifyNote || '',
+    submittedAt: u.submittedAt || null, createdAt: u.createdAt,
+    docCount: store.count('kyc_documents', (k) => k.userId === u.id),
+  })).reverse();
+  sendJson(res, 200, { items });
+}));
+
+api.get('/api/admin/users/:id', requireAdmin((req, res) => {
+  const u = store.find('users', req.params.id);
+  if (!u || u.role === 'admin') return sendJson(res, 404, { error: 'ไม่พบผู้ใช้' });
+  const docs = store.all('kyc_documents', (k) => k.userId === u.id).map(({ storedName, ...r }) => r);
+  sendJson(res, 200, {
+    user: publicUser(u),
+    profile: profileMeta(u),
+    kycDocs: docs.map((d) => ({ ...d, label: (profile.KYC_TYPES[d.docType] || {}).label || d.docType })),
+    addressText: profile.formatAddress(u.addr || {}),
+    branchText: profile.branchLabel(u),
+  });
+}));
+
+api.post('/api/admin/users/:id/verify', requireAdmin(async (req, res) => {
+  const b = await readJsonBody(req);
+  const u = store.find('users', req.params.id);
+  if (!u || u.role === 'admin') return sendJson(res, 404, { error: 'ไม่พบผู้ใช้' });
+  const approve = !!b.approve;
+  const note = String(b.note || '').slice(0, 500);
+  if (!approve && !note) return sendJson(res, 400, { error: 'กรุณาระบุเหตุผลที่ไม่อนุมัติ เพื่อให้ผู้ใช้แก้ไขได้ถูกต้อง' });
+  const updated = store.update('users', u.id, {
+    verifyStatus: approve ? 'verified' : 'rejected',
+    verifyNote: note,
+    verifiedAt: approve ? new Date().toISOString() : null,
+    verifiedBy: req.user.displayName,
+  });
+  logAudit(u.id, null, approve ? 'kyc-approve' : 'kyc-reject',
+    approve ? 'ผู้ดูแลระบบอนุมัติการยืนยันตัวตน' : `ผู้ดูแลระบบไม่อนุมัติ: ${note}`, req.user.displayName);
+  notify(u.id, 'kyc', approve
+    ? 'การยืนยันตัวตนของคุณได้รับการอนุมัติแล้ว'
+    : `การยืนยันตัวตนไม่ผ่าน: ${note}`, null);
+  sendJson(res, 200, { user: publicUser(updated) });
+}));
+
+/* =========================================================
+ *  สิทธิของเจ้าของข้อมูลส่วนบุคคล (PDPA)
+ * ========================================================= */
+
+// แก้ไข/ถอนความยินยอมในข้อที่ไม่บังคับ
+api.put('/api/pdpa/consent', requireAuth(async (req, res) => {
+  const b = await readJsonBody(req);
+  const check = pdpa.validateConsent(b.consent);
+  if (!check.ok) return sendJson(res, 400, { error: check.error });
+  const record = pdpa.makeConsentRecord(check.purposes);
+  const u = store.update('users', req.user.id, { consent: record });
+  store.insert('consents', {
+    userId: req.user.id, version: record.version, purposes: record.purposes,
+    action: 'update', at: record.at,
+  });
+  logAudit(req.user.id, null, 'consent-update', 'ปรับปรุงความยินยอมการใช้ข้อมูลส่วนบุคคล', req.user.displayName);
+  sendJson(res, 200, { user: publicUser(u) });
+}));
+
+// สิทธิขอสำเนาข้อมูล (มาตรา 30) — ดาวน์โหลดเป็นไฟล์ JSON
+api.get('/api/pdpa/my-data', requireAuth((req, res) => {
+  const data = pdpa.buildDataExport(store, req.user);
+  const body = Buffer.from(JSON.stringify(data, null, 2), 'utf8');
+  logAudit(req.user.id, null, 'data-export', 'ขอสำเนาข้อมูลส่วนบุคคลของตนเอง', req.user.displayName);
+  res.writeHead(200, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Disposition': `attachment; filename="taxflow-my-data-${req.user.id}.json"`,
+    'Content-Length': body.length,
+  });
+  res.end(body);
+}));
+
+// สิทธิขอลบข้อมูล (มาตรา 33) — ลบข้อมูลระบุตัวตน แต่คงเอกสารภาษีตามที่กฎหมายภาษีบังคับให้เก็บ
+api.post('/api/pdpa/delete-account', requireAuth(async (req, res) => {
+  const b = await readJsonBody(req);
+  if (!auth.verifyPassword(b.password || '', req.user.passwordHash)) {
+    return sendJson(res, 401, { error: 'รหัสผ่านไม่ถูกต้อง' });
+  }
+  if (String(b.confirm || '').trim() !== 'ลบบัญชีของฉัน') {
+    return sendJson(res, 400, { error: 'กรุณาพิมพ์ข้อความยืนยัน "ลบบัญชีของฉัน" ให้ถูกต้อง' });
+  }
+  const uid = req.user.id;
+
+  // ลบไฟล์ทั้งหมดที่เป็นข้อมูลส่วนบุคคล
+  for (const k of store.all('kyc_documents', (x) => x.userId === uid)) {
+    filestore.removeFile(store.UPLOAD_DIR, k.storedName);
+    store.remove('kyc_documents', k.id);
+  }
+  for (const f of ['logoFile', 'sealFile']) {
+    if (req.user[f] && req.user[f].storedName) filestore.removeFile(store.UPLOAD_DIR, req.user[f].storedName);
+  }
+  for (const t of ['contacts', 'signatures', 'notifications', 'otp_codes']) {
+    for (const row of store.all(t, (x) => x.userId === uid)) store.remove(t, row.id);
+  }
+
+  // ทำให้บัญชีไม่ระบุตัวตน แทนการลบทิ้งทั้งหมด เพราะเอกสารภาษีต้องเก็บ 5 ปี
+  const anon = {
+    ...profile.defaults(req.user.role),
+    email: `deleted-${uid}@removed.local`,
+    passwordHash: auth.hashPassword(crypto.randomBytes(24).toString('hex')),
+    displayName: 'ผู้ใช้ที่ลบบัญชีแล้ว', companyName: '', taxId: '',
+    deleted: true, deletedAt: new Date().toISOString(),
+    consent: null, emailVerified: false, verifyStatus: 'unverified',
+  };
+  store.update('users', uid, anon);
+  logAudit(uid, null, 'account-delete', 'ผู้ใช้ใช้สิทธิขอลบข้อมูลส่วนบุคคล — ลบข้อมูลระบุตัวตนแล้ว คงเหลือเฉพาะเอกสารภาษีที่กฎหมายบังคับให้เก็บ', 'ระบบ');
+  auth.clearSessionCookie(res);
+  sendJson(res, 200, { ok: true });
+}));
+
+/* =========================================================
+ *  OTP สำหรับขั้นตอนการลงลายมือชื่อดิจิทัล (ข้อกำหนด: ต้องยืนยันด้วย OTP ก่อนลงนามทุกครั้ง)
+ * ========================================================= */
+const OTP_SIGN_PURPOSES = {
+  // ลงนามเอกสารของตัวเอง — ต้องเป็นเจ้าของเอกสาร
+  'sign-doc': (req, refId) => {
+    const doc = store.find('documents', refId);
+    return (doc && doc.userId === req.user.id) ? doc : null;
+  },
+  // ลงนามตอบกลับคำขอจากคู่ค้า — ต้องเป็นผู้รับคำขอ และคำขอต้องยังรอตอบอยู่
+  'sign-request': (req, refId) => {
+    const r = store.find('requests', refId);
+    return (r && r.toUserId === req.user.id && r.status === 'sent') ? r : null;
+  },
+};
+
+api.post('/api/otp/request', requireAuth(async (req, res) => {
+  const b = await readJsonBody(req);
+  const checker = OTP_SIGN_PURPOSES[b.purpose];
+  if (!checker) return sendJson(res, 400, { error: 'ประเภทการยืนยันไม่ถูกต้อง' });
+  const target = checker(req, b.refId);
+  if (!target) return sendJson(res, 404, { error: 'ไม่พบรายการที่ต้องการยืนยัน หรือคุณไม่มีสิทธิ์ทำรายการนี้' });
+  const { id: otpId, code } = otp.createOtp(req.user.id, b.purpose, b.refId);
+  const mailResult = await mailer.sendOtpEmail(req.user.email, { code, purpose: b.purpose, displayName: req.user.displayName });
+  sendJson(res, 200, { otpId, emailMasked: maskEmail(req.user.email), ...(mailResult.dev ? { devCode: code } : {}) });
+}));
+
+api.post('/api/otp/resend', requireAuth(async (req, res) => {
+  const b = await readJsonBody(req);
+  const row = store.find('otp_codes', b.otpId);
+  if (!row || row.userId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบรายการ OTP นี้' });
+  const r = otp.regenerate(b.otpId);
+  if (!r) return sendJson(res, 400, { error: 'ไม่สามารถขอรหัสใหม่ได้ กรุณาเริ่มรายการใหม่' });
+  if (r.throttled) return sendJson(res, 429, { error: `กรุณารออีก ${r.waitSec} วินาทีก่อนขอรหัสใหม่` });
+  const mailResult = await mailer.sendOtpEmail(req.user.email, { code: r.code, purpose: row.purpose, displayName: req.user.displayName });
+  sendJson(res, 200, { otpId: b.otpId, ...(mailResult.dev ? { devCode: r.code } : {}) });
+}));
+
+/* =========================================================
+ *  TAX CALC
+ * ========================================================= */
+api.post('/api/wht/calc', async (req, res) => { const { amount, rate } = await readJsonBody(req); sendJson(res, 200, tax.calcWithholding(amount, rate)); });
+api.post('/api/vat/calc', async (req, res) => { const { amount, rate } = await readJsonBody(req); sendJson(res, 200, tax.calcVat(amount, rate)); });
+api.post('/api/pit/estimate', async (req, res) => { const b = await readJsonBody(req); sendJson(res, 200, tax.estimatePersonalIncomeTax(b.grossIncome, b)); });
+
+/* =========================================================
+ *  CONTACTS
+ * ========================================================= */
+api.get('/api/contacts', requireAuth((req, res) => sendJson(res, 200, { items: store.all('contacts', (c) => c.userId === req.user.id).reverse() })));
+api.post('/api/contacts', requireAuth(async (req, res) => {
+  const b = await readJsonBody(req);
+  sendJson(res, 201, store.insert('contacts', {
+    userId: req.user.id, name: b.name || '', taxId: b.taxId || '', kind: b.kind || 'buyer',
+    email: b.email || '', phone: b.phone || '', address: b.address || '', bank: b.bank || '', note: b.note || '',
+  }));
+}));
+api.delete('/api/contacts/:id', requireAuth((req, res) => {
+  const c = store.find('contacts', req.params.id);
+  if (!c || c.userId !== req.user.id) return sendJson(res, 404, { error: 'not found' });
+  store.remove('contacts', req.params.id); sendJson(res, 200, { deleted: true });
+}));
+
+/* =========================================================
+ *  DOCUMENTS — create
+ * ========================================================= */
+function createDoc(user, type, fields, extra) {
+  const doc = store.insert('documents', {
+    userId: user.id, type, docNo: makeDocNo(type, user.id),
+    status: 'draft', signed: false, signature: null,
+    ...fields,
+  });
+  snapshotVersion(doc, user.displayName, 'สร้างเอกสาร');
+  logAudit(user.id, doc.id, 'create', `สร้าง ${doc.docNo}`, user.displayName);
+  return doc;
+}
+
+api.post('/api/etax/invoice', requireAuth(async (req, res) => {
+  const gate = profile.canIssue(req.user, 'ETAX');
+  if (!gate.ok) return sendJson(res, 403, { error: gate.error, missing: gate.missing });
+  const b = await readJsonBody(req);
+  const v = validateDocument('ETAX', b);
+  if (!v.ok) return sendJson(res, 400, { error: 'ข้อมูลไม่ครบถ้วน', errors: v.errors });
+  const items = b.items.filter((i) => i.name || i.price);
+  const subtotal = items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.price) || 0), 0);
+  const vat = tax.calcVat(subtotal, b.vatRate ?? 7);
+  const doc = createDoc(req.user, 'ETAX', { docPurpose: ['self','send','record'].includes(b.docPurpose) ? b.docPurpose : 'self',
+    buyer: b.buyer || '', buyerTaxId: b.buyerTaxId || '', items,
+    base: vat.base, vatRate: vat.rate, vat: vat.vat, total: vat.total,
+    signatureStandard: 'PAdES (จำลอง)', dueDate: b.dueDate || '',
+  });
+  sendJson(res, 201, doc);
+}));
+api.post('/api/ewht/certificate', requireAuth(async (req, res) => {
+  const gate = profile.canIssue(req.user, 'EWHT');
+  if (!gate.ok) return sendJson(res, 403, { error: gate.error, missing: gate.missing });
+  const b = await readJsonBody(req);
+  const v = validateDocument('EWHT', b);
+  if (!v.ok) return sendJson(res, 400, { error: 'ข้อมูลไม่ครบถ้วน', errors: v.errors });
+  const calc = tax.calcWithholding(b.amount, b.rate ?? 3);
+  const doc = createDoc(req.user, 'EWHT', { docPurpose: ['self','send','record'].includes(b.docPurpose) ? b.docPurpose : 'self',
+    payee: b.payee || '', payeeTaxId: b.payeeTaxId || '', incomeType: b.incomeType || 'มาตรา 40(2)',
+    description: b.description || 'ค่าจ้างผลิตเนื้อหา', ...calc, signatureStandard: 'XAdES (จำลอง)', dueDate: b.dueDate || '',
+  });
+  sendJson(res, 201, doc);
+}));
+api.post('/api/wht/store', requireAuth(async (req, res) => {
+  const b = await readJsonBody(req);
+  const v = validateDocument('WHT', b);
+  if (!v.ok) return sendJson(res, 400, { error: 'ข้อมูลไม่ครบถ้วน', errors: v.errors });
+  const calc = tax.calcWithholding(b.amount, b.rate ?? 3);
+  const doc = createDoc(req.user, 'WHT', { docPurpose: 'record',
+    payer: b.payer || '', description: b.description || 'ค่าจ้างผลิตเนื้อหา', incomeType: b.incomeType || 'มาตรา 40(2)', ...calc,
+  });
+  sendJson(res, 201, doc);
+}));
+
+/* =========================================================
+ *  เอกสารธุรกิจ + สัญญา (ver5): ใบเสร็จ/ใบแจ้งหนี้/ใบเสนอราคา/PO/ใบส่งมอบงาน/ใบสำคัญจ่าย/สัญญาจ้าง
+ * ========================================================= */
+const BIZ_TYPES = ['RECEIPT', 'INVOICE', 'QUOTATION', 'PO', 'DELIVERY', 'PAYMENT'];
+const CONTRACT_TYPES = ['CONTRACT_INF', 'CONTRACT_BRAND'];
+const PAPER_TYPES = ['POA']; // เอกสารไม่มียอดเงิน
+
+api.post('/api/docs/create', requireAuth(async (req, res) => {
+  const b = await readJsonBody(req);
+  const type = b.type;
+  const gate = profile.canIssue(req.user, type);
+  if (!gate.ok) return sendJson(res, 403, { error: gate.error, missing: gate.missing });
+  if (![...BIZ_TYPES, ...CONTRACT_TYPES, ...PAPER_TYPES].includes(type)) return sendJson(res, 400, { error: 'ประเภทเอกสารไม่ถูกต้อง' });
+  const errors = [];
+  if (!b.party) errors.push('กรุณาระบุชื่อคู่สัญญา/คู่ค้า');
+  let base = 0, vat = 0, vatRate = 0, items = [];
+  if (type === 'POA') {
+    if (!b.scope) errors.push('กรุณาระบุขอบเขตอำนาจที่มอบ');
+  } else if (CONTRACT_TYPES.includes(type)) {
+    base = round2(Number(b.fee) || 0);
+    if (!(base > 0)) errors.push('กรุณาระบุค่าตอบแทนตามสัญญา');
+    if (!b.scope) errors.push('กรุณาระบุขอบเขตงาน');
+  } else if (type === 'PAYMENT') {
+    base = round2(Number(b.amount) || 0);
+    if (!(base > 0)) errors.push('กรุณาระบุยอดเงินที่ชำระ');
+  } else {
+    items = (Array.isArray(b.items) ? b.items : []).filter((i) => i.name || i.price);
+    if (!items.length) errors.push('กรุณาเพิ่มรายการอย่างน้อย 1 รายการ');
+    base = round2(items.reduce((s2, i) => s2 + (Number(i.qty) || 0) * (Number(i.price) || 0), 0));
+    if (b.includeVat) { vatRate = Number(b.vatRate) || 7; vat = round2(base * vatRate / 100); }
+  }
+  if (errors.length) return sendJson(res, 400, { error: 'ข้อมูลไม่ครบถ้วน', errors });
+  const doc = createDoc(req.user, type, {
+    party: b.party, partyTaxId: b.partyTaxId || '', partyAddress: b.partyAddress || '',
+    items, base, vatRate, vat, total: round2(base + vat), net: round2(base + vat),
+    description: b.description || '', note: b.note || '',
+    method: b.method || '', payRef: b.payRef || '',
+    scope: b.scope || '', paymentTerms: b.paymentTerms || '', startDate: b.startDate || '', endDate: b.endDate || '',
+    dueDate: b.dueDate || '', validDays: b.validDays || '', deliveryDate: b.deliveryDate || '', phase: b.phase || '',
+    effectiveUntil: b.effectiveUntil || '', issuerRole: req.user.role,
+    docPurpose: ['self', 'send', 'record'].includes(b.docPurpose) ? b.docPurpose : 'self',
+  });
+  sendJson(res, 201, doc);
+}));
+
+/* =========================================================
+ *  คัดลอกเอกสาร (Duplicate — ver10)
+ * ========================================================= */
+api.post('/api/documents/:id/duplicate', requireAuth((req, res) => {
+  const src = ownDoc(req);
+  if (!src) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
+  const { id, docNo, status, signed, signature, counterpartySignature, pdfKey, xmlKey, createdAt, updatedAt, ...rest } = src;
+  const copy = createDoc(req.user, src.type, { ...rest, signed: false, signature: null, counterpartySignature: null });
+  logAudit(req.user.id, copy.id, 'duplicate', `คัดลอกจาก ${src.docNo}`, req.user.displayName);
+  sendJson(res, 201, copy);
+}));
+
+/* =========================================================
+ *  ระบบส่งเอกสารข้ามบัญชี (ver6): ขอลายเซ็น/ขอตรวจสอบ พร้อมกำหนดเวลา
+ *  บริษัท↔อินฟลู · บริษัท↔เอเจนซี่ · เอเจนซี่เป็นตัวกลางส่งทั้งสองฝ่าย
+ * ========================================================= */
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const reqPublic = (r) => {
+  const doc = store.find('documents', r.docId);
+  const from = store.find('users', r.fromUserId);
+  const to = store.find('users', r.toUserId);
+  return {
+    id: r.id, docId: r.docId, purpose: r.purpose, message: r.message, dueDate: r.dueDate,
+    signAs: r.signAs || '', status: r.status, sentAt: r.createdAt, respondedAt: r.respondedAt || null,
+    declineReason: r.declineReason || '',
+    overdue: r.status === 'sent' && r.dueDate && r.dueDate < todayStr(),
+    doc: doc ? { docNo: doc.docNo, type: doc.type, base: doc.base, total: doc.total ?? doc.net, party: doc.party || doc.buyer || doc.payee || doc.payer || '', status: doc.status, counterpartySigned: !!doc.counterpartySignature } : null,
+    fromName: from ? (from.companyName || from.displayName) : '', fromEmail: from ? from.email : '',
+    toName: to ? (to.companyName || to.displayName) : '', toEmail: to ? to.email : '',
+  };
+};
+
+// ส่งเอกสารให้บัญชีอื่น (ระบุอีเมลผู้ใช้ในระบบ)
+api.post('/api/documents/:id/request', requireAuth(async (req, res) => {
+  const doc = ownDoc(req);
+  if (!doc) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
+  const b = await readJsonBody(req);
+  const email = String(b.toEmail || '').trim().toLowerCase();
+  if (!email) return sendJson(res, 400, { error: 'กรุณาระบุอีเมลผู้รับ' });
+  const target = store.findOne('users', (u) => u.email === email);
+  if (!target) return sendJson(res, 404, { error: 'ไม่พบบัญชีผู้ใช้อีเมลนี้ในระบบ — คู่ค้าต้องสมัคร TaxFlow ด้วยอีเมลดังกล่าวก่อน' });
+  if (target.id === req.user.id) return sendJson(res, 400, { error: 'ไม่สามารถส่งเอกสารหาตัวเองได้' });
+  // ข้อ 4: ผู้ออกเอกสารต้องลงนามฝั่งตนเองก่อน จึงส่งขอลายเซ็นจากคู่ค้าได้
+  if ((b.purpose || 'sign') !== 'review' && !doc.signature) {
+    return sendJson(res, 400, { error: 'ผู้ออกเอกสารต้องลงนามก่อนส่งขอลายเซ็นจากคู่ค้า — ลงนามได้ที่แท็บ "ลายเซ็น" หรือปุ่มลงนามในหน้านี้' });
+  }
+  // ยกเลิกคำขอเดิมที่ยังค้างของเอกสารนี้
+  store.all('requests', (r) => r.docId === doc.id && r.status === 'sent').forEach((r) => store.update('requests', r.id, { status: 'cancelled' }));
+  const purpose = b.purpose === 'review' ? 'review' : 'sign';
+  const row = store.insert('requests', {
+    docId: doc.id, fromUserId: req.user.id, toUserId: target.id, toEmail: email,
+    purpose, message: b.message || '', dueDate: b.dueDate || '', signAs: b.signAs || '', status: 'sent',
+  });
+  if (doc.status === 'draft') {
+    const updated = store.update('documents', doc.id, { status: 'pending' });
+    snapshotVersion(updated, req.user.displayName, 'ส่งเอกสารให้คู่ค้า');
+  }
+  logAudit(req.user.id, doc.id, 'send', `ส่ง ${doc.docNo} ถึง ${email} (${purpose === 'sign' ? 'ขอลายเซ็น' : 'ขอตรวจสอบ'}${b.dueDate ? ' ภายใน ' + b.dueDate : ''})`, req.user.displayName);
+  const senderName = req.user.companyName || req.user.displayName;
+  notify(target.id, 'request', `${senderName} ส่งเอกสาร ${doc.docNo} ให้คุณ${purpose === 'sign' ? 'ลงนาม' : 'ตรวจสอบ'}${b.dueDate ? ' ภายในวันที่ ' + b.dueDate : ''}`, null, { reqId: row.id });
+  sendJson(res, 201, reqPublic(row));
+}));
+
+// กล่องรับเอกสาร (คำขอที่ส่งมาถึงฉัน)
+api.get('/api/requests/inbox', requireAuth((req, res) => {
+  const items = store.all('requests', (r) => r.toUserId === req.user.id).reverse().map(reqPublic);
+  sendJson(res, 200, { items, actionCount: items.filter((x) => x.status === 'sent').length });
+}));
+
+// คำขอของเอกสารหนึ่งฉบับ (ฝั่งผู้ส่ง — ใช้ในแท็บ "ส่งเอกสาร")
+api.get('/api/documents/:id/requests', requireAuth((req, res) => {
+  const doc = ownDoc(req);
+  if (!doc) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
+  sendJson(res, 200, { items: store.all('requests', (r) => r.docId === doc.id).reverse().map(reqPublic) });
+}));
+
+// ผู้รับเปิดดูเอกสาร (PDF) จากคำขอ
+api.get('/api/requests/:id/pdf', (req, res) => {
+  const user = currentUser(req);
+  if (!user) return sendHtml(res, 401, '<h2>กรุณาเข้าสู่ระบบก่อน</h2>');
+  const r = store.find('requests', req.params.id);
+  if (!r || (r.toUserId !== user.id && r.fromUserId !== user.id)) return sendHtml(res, 404, '<h2>ไม่พบคำขอ</h2>');
+  const doc = store.find('documents', r.docId);
+  const issuer = store.find('users', r.fromUserId);
+  if (!doc || !issuer) return sendHtml(res, 404, '<h2>ไม่พบเอกสาร</h2>');
+  const attachments = store.all('attachments', (a) => a.docId === doc.id);
+  logAudit(r.fromUserId, doc.id, 'view', `${user.displayName} เปิดดูเอกสารจากคำขอ`, user.displayName);
+  sendHtml(res, 200, docview.render(doc, issuer, { attachments, brand: brandCtx(issuer) }));
+});
+
+// ผู้รับลงนามตอบกลับ (ใช้คลังลายเซ็นของบัญชีตนเอง)
+api.post('/api/requests/:id/sign', requireAuth(async (req, res) => {
+  const r = store.find('requests', req.params.id);
+  if (!r || r.toUserId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบคำขอ' });
+  if (r.status !== 'sent') return sendJson(res, 400, { error: 'คำขอนี้ถูกตอบไปแล้ว' });
+  const b = await readJsonBody(req);
+  const doc = store.find('documents', r.docId);
+  if (!doc) return sendJson(res, 404, { error: 'เอกสารถูกลบแล้ว' });
+  // ต้องยืนยันด้วยรหัส OTP ที่ส่งไปยังอีเมลก่อนลงนามทุกครั้ง
+  const check = otp.verify(b.otpId, b.code, { userId: req.user.id, purpose: 'sign-request', refId: r.id });
+  if (!check.ok) return sendJson(res, 400, { error: check.error });
+  const signerName = b.signerName || req.user.displayName;
+  const updated = store.update('documents', doc.id, {
+    counterpartySignature: {
+      signerName, image: b.image || null, signedAt: new Date().toISOString(),
+      byUserId: req.user.id, byEmail: req.user.email, signAs: r.signAs || '',
+    },
+  });
+  store.update('requests', r.id, { status: 'signed', respondedAt: new Date().toISOString() });
+  snapshotVersion(updated, signerName, 'คู่ค้าลงนามตอบกลับ');
+  logAudit(r.fromUserId, doc.id, 'countersign', `${signerName} (${req.user.email}) ลงนามเอกสาร`, signerName);
+  const senderName = req.user.companyName || req.user.displayName;
+  notify(r.fromUserId, 'signed', `${senderName} ลงนามเอกสาร ${doc.docNo} เรียบร้อยแล้ว`, doc.id);
+  sendJson(res, 200, { ok: true });
+}));
+
+// ผู้รับตอบรับผลตรวจ (กรณี purpose=review) หรือปฏิเสธ
+api.post('/api/requests/:id/approve', requireAuth(async (req, res) => {
+  const r = store.find('requests', req.params.id);
+  if (!r || r.toUserId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบคำขอ' });
+  if (r.status !== 'sent') return sendJson(res, 400, { error: 'คำขอนี้ถูกตอบไปแล้ว' });
+  const doc = store.find('documents', r.docId);
+  store.update('requests', r.id, { status: 'approved', respondedAt: new Date().toISOString() });
+  logAudit(r.fromUserId, doc.id, 'review-ok', `${req.user.displayName} ตรวจสอบแล้ว ไม่มีแก้ไข`, req.user.displayName);
+  notify(r.fromUserId, 'approved', `${req.user.companyName || req.user.displayName} ตรวจสอบเอกสาร ${doc.docNo} แล้ว — ผ่าน`, doc.id);
+  sendJson(res, 200, { ok: true });
+}));
+
+api.post('/api/requests/:id/decline', requireAuth(async (req, res) => {
+  const r = store.find('requests', req.params.id);
+  if (!r || r.toUserId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบคำขอ' });
+  if (r.status !== 'sent') return sendJson(res, 400, { error: 'คำขอนี้ถูกตอบไปแล้ว' });
+  const b = await readJsonBody(req);
+  const doc = store.find('documents', r.docId);
+  store.update('requests', r.id, { status: 'declined', respondedAt: new Date().toISOString(), declineReason: b.reason || '' });
+  logAudit(r.fromUserId, doc.id, 'declined', `${req.user.displayName} ปฏิเสธ: ${b.reason || '-'}`, req.user.displayName);
+  notify(r.fromUserId, 'rejected', `${req.user.companyName || req.user.displayName} ตีกลับเอกสาร ${doc.docNo}${b.reason ? ' — ' + b.reason : ''}`, doc.id);
+  sendJson(res, 200, { ok: true });
+}));
+
+// ผู้ส่งยกเลิกคำขอ
+api.post('/api/requests/:id/cancel', requireAuth((req, res) => {
+  const r = store.find('requests', req.params.id);
+  if (!r || r.fromUserId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบคำขอ' });
+  if (r.status !== 'sent') return sendJson(res, 400, { error: 'คำขอนี้ปิดไปแล้ว' });
+  store.update('requests', r.id, { status: 'cancelled' });
+  sendJson(res, 200, { ok: true });
+}));
+
+/* =========================================================
+ *  คลังลายเซ็น (ข้อ 5): บันทึกลายเซ็น เรียกใช้ซ้ำได้
+ * ========================================================= */
+api.get('/api/signatures', requireAuth((req, res) => {
+  sendJson(res, 200, { items: store.all('signatures', (x) => x.userId === req.user.id).reverse() });
+}));
+api.post('/api/signatures', requireAuth(async (req, res) => {
+  const b = await readJsonBody(req);
+  if (!b.image || !b.image.startsWith('data:image/')) return sendJson(res, 400, { error: 'รูปลายเซ็นไม่ถูกต้อง' });
+  if (b.image.length > 700 * 1024) return sendJson(res, 413, { error: 'รูปลายเซ็นใหญ่เกินไป' });
+  const row = store.insert('signatures', { userId: req.user.id, name: b.name || req.user.displayName, image: b.image });
+  logAudit(req.user.id, null, 'signature-save', `บันทึกลายเซ็น "${row.name}" เข้าคลัง`, req.user.displayName);
+  sendJson(res, 201, row);
+}));
+api.delete('/api/signatures/:id', requireAuth((req, res) => {
+  const x = store.find('signatures', req.params.id);
+  if (!x || x.userId !== req.user.id) return sendJson(res, 404, { error: 'not found' });
+  store.remove('signatures', x.id);
+  sendJson(res, 200, { deleted: true });
+}));
+
+/* =========================================================
+ *  DOCUMENTS — list / detail / edit / status / delete
+ * ========================================================= */
+function ownDoc(req) {
+  const doc = store.find('documents', req.params.id);
+  if (!doc || doc.userId !== req.user.id) return null;
+  return doc;
+}
+
+api.get('/api/documents', requireAuth((req, res) => {
+  const url = new URL(req.url, 'http://localhost');
+  const p = url.searchParams;
+  const type = p.get('type'), status = p.get('status'), q = (p.get('q') || '').toLowerCase();
+  const contact = (p.get('contact') || '').toLowerCase();
+  const from = p.get('from'), to = p.get('to');
+  const rows = store.all('documents', (d) =>
+    d.userId === req.user.id &&
+    (!type || d.type === type) &&
+    (!status || d.status === status) &&
+    (!q || (d.docNo || '').toLowerCase().includes(q) || JSON.stringify(d).toLowerCase().includes(q)) &&
+    (!contact || (`${d.buyer || ''}${d.payee || ''}${d.payer || ''}`).toLowerCase().includes(contact)) &&
+    (!from || (d.createdAt || '').slice(0, 10) >= from) &&
+    (!to || (d.createdAt || '').slice(0, 10) <= to)
+  ).reverse();
+  const withReq = rows.map((d) => {
+    const reqs = store.all('requests', (r) => r.docId === d.id);
+    const last = reqs.length ? reqs[reqs.length - 1] : null;
+    if (!last) return d;
+    const toU = store.find('users', last.toUserId);
+    return { ...d, sentTo: { email: last.toEmail, name: toU ? (toU.companyName || toU.displayName) : last.toEmail, status: last.status, dueDate: last.dueDate || '' } };
+  });
+  sendJson(res, 200, { count: withReq.length, items: withReq });
+}));
+
+api.get('/api/documents/:id', requireAuth((req, res) => {
+  const doc = ownDoc(req);
+  if (!doc) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
+  const attachments = store.all('attachments', (a) => a.docId === doc.id).map((a) => { const { dataBase64, storedName, ...meta } = a; return meta; });
+  const versions = store.all('doc_versions', (v) => v.docId === doc.id);
+  const audit = store.all('audit_log', (a) => a.docId === doc.id).reverse();
+  const share = store.findOne('shares', (s) => s.docId === doc.id);
+  const reqsAll = store.all('requests', (r) => r.docId === doc.id);
+  const lastReq = reqsAll.length ? reqPublic(reqsAll[reqsAll.length - 1]) : null;
+  sendJson(res, 200, { ...doc, attachments, versions, audit, share: share ? { token: share.token } : null, activeRequest: lastReq, allowedTransitions: STATUS_FLOW[doc.status] || [] });
+}));
+
+api.put('/api/documents/:id', requireAuth(async (req, res) => {
+  const doc = ownDoc(req);
+  if (!doc) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
+  if (['approved', 'archived', 'cancelled'].includes(doc.status)) return sendJson(res, 400, { error: 'เอกสารสถานะนี้แก้ไขไม่ได้' });
+  const b = await readJsonBody(req);
+  let patch = {};
+  const GEN_TYPES = [...BIZ_TYPES, ...CONTRACT_TYPES];
+  if (GEN_TYPES.includes(doc.type)) {
+    patch = { party: b.party ?? doc.party, partyTaxId: b.partyTaxId ?? doc.partyTaxId, note: b.note ?? doc.note, scope: b.scope ?? doc.scope };
+    if (b.amount !== undefined || b.fee !== undefined) {
+      const base = round2(Number(b.amount ?? b.fee) || doc.base);
+      const vat = doc.vatRate ? round2(base * doc.vatRate / 100) : 0;
+      Object.assign(patch, { base, vat, total: round2(base + vat), net: round2(base + vat) });
+    }
+  } else if (doc.type === 'ETAX') {
+    const items = Array.isArray(b.items) ? b.items.filter((i) => i.name || i.price) : doc.items;
+    const subtotal = items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.price) || 0), 0);
+    const vat = tax.calcVat(subtotal, b.vatRate ?? doc.vatRate);
+    patch = { buyer: b.buyer ?? doc.buyer, buyerTaxId: b.buyerTaxId ?? doc.buyerTaxId, items, base: vat.base, vatRate: vat.rate, vat: vat.vat, total: vat.total };
+  } else {
+    const calc = tax.calcWithholding(b.amount ?? doc.base, b.rate ?? doc.rate);
+    patch = { payee: b.payee ?? doc.payee, payer: b.payer ?? doc.payer, description: b.description ?? doc.description, incomeType: b.incomeType ?? doc.incomeType, ...calc };
+  }
+  const updated = store.update('documents', doc.id, patch);
+  snapshotVersion(updated, req.user.displayName, b.note || 'แก้ไขเอกสาร');
+  logAudit(req.user.id, doc.id, 'edit', `แก้ไข ${doc.docNo}`, req.user.displayName);
+  notify(req.user.id, 'edit', `มีการแก้ไขเอกสาร ${doc.docNo}`, doc.id);
+  sendJson(res, 200, updated);
+}));
+
+api.post('/api/documents/:id/status', requireAuth(async (req, res) => {
+  const doc = ownDoc(req);
+  if (!doc) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
+  const b = await readJsonBody(req);
+  const next = b.status;
+  if (!(STATUS_FLOW[doc.status] || []).includes(next)) return sendJson(res, 400, { error: `เปลี่ยนจาก "${STATUS_LABEL[doc.status]}" เป็น "${STATUS_LABEL[next] || next}" ไม่ได้` });
+  const updated = store.update('documents', doc.id, { status: next, statusNote: b.note || '' });
+  snapshotVersion(updated, req.user.displayName, `เปลี่ยนสถานะเป็น ${STATUS_LABEL[next]}`);
+  logAudit(req.user.id, doc.id, 'status', `${STATUS_LABEL[doc.status]} → ${STATUS_LABEL[next]}`, req.user.displayName);
+  const notifyMap = { approved: `เอกสาร ${doc.docNo} ได้รับการอนุมัติ`, rejected: `เอกสาร ${doc.docNo} ถูกตีกลับ (ไม่อนุมัติ)`, pending: `เอกสาร ${doc.docNo} ถูกส่งเข้ารอตรวจสอบ` };
+  if (notifyMap[next]) notify(req.user.id, next, notifyMap[next], doc.id);
+  sendJson(res, 200, updated);
+}));
+
+api.delete('/api/documents/:id', requireAuth((req, res) => {
+  const doc = ownDoc(req);
+  if (!doc) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
+  store.all('attachments', (a) => a.docId === doc.id).forEach((a) => { try { fs.unlinkSync(path.join(store.UPLOAD_DIR, a.storedName)); } catch {} store.remove('attachments', a.id); });
+  store.remove('documents', doc.id);
+  logAudit(req.user.id, null, 'delete', `ลบเอกสาร ${doc.docNo}`, req.user.displayName);
+  sendJson(res, 200, { deleted: true });
+}));
+
+/* =========================================================
+ *  VERSIONS
+ * ========================================================= */
+api.get('/api/documents/:id/versions', requireAuth((req, res) => {
+  const doc = ownDoc(req);
+  if (!doc) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
+  sendJson(res, 200, { items: store.all('doc_versions', (v) => v.docId === doc.id) });
+}));
+
+/* =========================================================
+ *  ATTACHMENTS (upload / list / download / delete)
+ * ========================================================= */
+const ALLOWED_MIME = { 'application/pdf': 'pdf', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+const MAX_SIZE = 5 * 1024 * 1024;
+
+api.post('/api/documents/:id/attachments', requireAuth(async (req, res) => {
+  const doc = ownDoc(req);
+  if (!doc) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
+  const b = await readJsonBody(req);
+  if (!b.dataBase64) return sendJson(res, 400, { error: 'ไม่พบไฟล์' });
+  if (!ALLOWED_MIME[b.mime]) return sendJson(res, 415, { error: 'รองรับเฉพาะไฟล์ PDF, PNG, JPG, WEBP เท่านั้น' });
+  const buf = Buffer.from(b.dataBase64, 'base64');
+  if (buf.length > MAX_SIZE) return sendJson(res, 413, { error: 'ไฟล์มีขนาดเกิน 5 MB' });
+  const storedName = crypto.randomBytes(12).toString('hex') + '.' + ALLOWED_MIME[b.mime];
+  fs.writeFileSync(path.join(store.UPLOAD_DIR, storedName), buf);
+  const att = store.insert('attachments', {
+    userId: req.user.id, docId: doc.id, kind: b.kind || 'other',
+    filename: b.filename || storedName, mime: b.mime, size: buf.length, storedName,
+  });
+  logAudit(req.user.id, doc.id, 'upload', `แนบไฟล์ ${att.filename}`, req.user.displayName);
+  const { dataBase64, storedName: sn, ...meta } = att;
+  sendJson(res, 201, meta);
+}));
+
+api.get('/api/attachments/:id', requireAuth((req, res) => {
+  const a = store.find('attachments', req.params.id);
+  if (!a || a.userId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบไฟล์' });
+  try {
+    const buf = fs.readFileSync(path.join(store.UPLOAD_DIR, a.storedName));
+    res.writeHead(200, { 'Content-Type': a.mime, 'Content-Disposition': `inline; filename="file"`, 'Content-Length': buf.length });
+    res.end(buf);
+  } catch { sendJson(res, 404, { error: 'ไฟล์หาย' }); }
+}));
+
+api.delete('/api/attachments/:id', requireAuth((req, res) => {
+  const a = store.find('attachments', req.params.id);
+  if (!a || a.userId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบไฟล์' });
+  try { fs.unlinkSync(path.join(store.UPLOAD_DIR, a.storedName)); } catch {}
+  store.remove('attachments', a.id);
+  logAudit(req.user.id, a.docId, 'delete-attachment', `ลบไฟล์แนบ ${a.filename}`, req.user.displayName);
+  sendJson(res, 200, { deleted: true });
+}));
+
+/* =========================================================
+ *  E-SIGNATURE
+ * ========================================================= */
+api.post('/api/documents/:id/sign', requireAuth(async (req, res) => {
+  const doc = ownDoc(req);
+  if (!doc) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
+  const b = await readJsonBody(req);
+  // ต้องยืนยันด้วยรหัส OTP ที่ส่งไปยังอีเมลก่อนลงนามทุกครั้ง
+  const check = otp.verify(b.otpId, b.code, { userId: req.user.id, purpose: 'sign-doc', refId: doc.id });
+  if (!check.ok) return sendJson(res, 400, { error: check.error });
+  const signature = { signerName: b.signerName || req.user.displayName, signedAt: new Date().toISOString(), image: b.image || null };
+  const updated = store.update('documents', doc.id, { signed: true, signature });
+  snapshotVersion(updated, req.user.displayName, 'ลงลายมือชื่อดิจิทัล (ยืนยันด้วย OTP)');
+  logAudit(req.user.id, doc.id, 'sign', `ลงนามโดย ${signature.signerName} (ยืนยันด้วย OTP)`, req.user.displayName);
+  sendJson(res, 200, updated);
+}));
+
+/* =========================================================
+ *  SHARE + VERIFY + QR
+ * ========================================================= */
+function ensureShare(doc, userId) {
+  let share = store.findOne('shares', (s) => s.docId === doc.id);
+  if (!share) share = store.insert('shares', { token: crypto.randomBytes(10).toString('hex'), docId: doc.id, userId });
+  return share;
+}
+function verifyUrl(req, token) {
+  const host = req.headers.host || `localhost:${PORT}`;
+  return `http://${host}/verify.html?token=${token}`;
+}
+
+api.post('/api/documents/:id/share', requireAuth((req, res) => {
+  const doc = ownDoc(req);
+  if (!doc) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
+  const share = ensureShare(doc, req.user.id);
+  logAudit(req.user.id, doc.id, 'share', `สร้างลิงก์แชร์ ${doc.docNo}`, req.user.displayName);
+  sendJson(res, 200, { token: share.token, url: verifyUrl(req, share.token) });
+}));
+
+api.get('/api/documents/:id/qr.svg', requireAuth((req, res) => {
+  const doc = ownDoc(req);
+  if (!doc) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
+  const share = ensureShare(doc, req.user.id);
+  const svg = qr.toSVG(verifyUrl(req, share.token), { scale: 4 });
+  res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8' }); res.end(svg);
+}));
+
+api.get('/api/verify/:token', (req, res) => {
+  const share = store.findOne('shares', (s) => s.token === req.params.token);
+  if (!share) return sendJson(res, 404, { valid: false, error: 'ไม่พบเอกสาร' });
+  const doc = store.find('documents', share.docId);
+  if (!doc) return sendJson(res, 404, { valid: false, error: 'เอกสารถูกลบแล้ว' });
+  const issuer = store.find('users', doc.userId);
+  sendJson(res, 200, {
+    valid: true, docNo: doc.docNo, type: doc.type, status: doc.status,
+    counterparty: doc.buyer || doc.payee || doc.payer || '',
+    base: doc.base, total: doc.type === 'ETAX' ? doc.total : doc.net,
+    signed: doc.signed, signerName: doc.signature ? doc.signature.signerName : null,
+    signedAt: doc.signature ? doc.signature.signedAt : null,
+    issuer: issuer ? (issuer.companyName || issuer.displayName) : '', createdAt: doc.createdAt,
+  });
+});
+
+/* =========================================================
+ *  PDF / EXPORT / PRINT
+ * ========================================================= */
+
+/* ---------- โลโก้/ตราประทับสำหรับพิมพ์ลงบนเอกสาร ---------- */
+// อ่านไฟล์ภาพของผู้ออกเอกสารแล้วแปลงเป็น data URI เพื่อฝังลงใน HTML ที่สั่งพิมพ์เป็น PDF
+// (ต้องฝังเป็น data URI เพราะหน้าพิมพ์อาจถูกเปิดโดยผู้รับที่ไม่มีสิทธิ์เรียกไฟล์ของผู้ออกเอกสาร)
+function brandDataUri(user, kind) {
+  const meta = user && user[kind === 'seal' ? 'sealFile' : 'logoFile'];
+  if (!meta || !meta.storedName) return null;
+  try {
+    const buf = fs.readFileSync(path.join(store.UPLOAD_DIR, meta.storedName));
+    return `data:${meta.mime};base64,${buf.toString('base64')}`;
+  } catch { return null; }
+}
+function brandCtx(user) {
+  return {
+    logo: brandDataUri(user, 'logo'),
+    seal: brandDataUri(user, 'seal'),
+    branchText: profile.branchLabel(user),
+    addressText: profile.formatAddress(user.addr || {}) || user.address || '',
+    vatRegistered: !!user.vatRegistered,
+    authName: user.authName || '',
+    authPosition: user.authPosition || '',
+  };
+}
+
+api.get('/api/documents/:id/pdf', (req, res) => {
+  const user = currentUser(req);
+  if (!user) return sendHtml(res, 401, '<h2>กรุณาเข้าสู่ระบบก่อน</h2>');
+  const doc = store.find('documents', req.params.id);
+  if (!doc || doc.userId !== user.id) return sendHtml(res, 404, '<h2>ไม่พบเอกสาร</h2>');
+  const attachments = store.all('attachments', (a) => a.docId === doc.id);
+  const share = store.findOne('shares', (s) => s.docId === doc.id);
+  const ctx = { attachments, brand: brandCtx(user) };
+  if (share) ctx.qrSvg = qr.toSVG(verifyUrl(req, share.token), { scale: 2 });
+  logAudit(user.id, doc.id, 'download', `เปิด/พิมพ์ PDF ${doc.docNo}`, user.displayName);
+  sendHtml(res, 200, docview.render(doc, user, ctx));
+});
+
+function filteredDocs(req) {
+  const url = new URL(req.url, 'http://localhost');
+  const p = url.searchParams;
+  const type = p.get('type'), status = p.get('status');
+  return store.all('documents', (d) => d.userId === req.user.id && (!type || d.type === type) && (!status || d.status === status)).reverse();
+}
+// หัวรายงานที่ผู้ใช้ตั้งค่าเองได้ (ชื่อผู้ประกอบการ เลขผู้เสียภาษี ที่อยู่ สาขา และโลโก้)
+function exportBrand(user) {
+  return {
+    name: user.companyName || user.displayName || '',
+    taxId: user.taxId ? thaiid.format(user.taxId) : '',
+    address: profile.formatAddress(user.addr || {}) || user.address || '',
+    branch: profile.branchLabel(user),
+    logo: brandDataUri(user, 'logo'),
+  };
+}
+
+api.get('/api/export/csv', requireAuth((req, res) => {
+  const csv = exporter.toCSV(filteredDocs(req), exportBrand(req.user));
+  logAudit(req.user.id, null, 'export', 'ส่งออก CSV', req.user.displayName);
+  res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="taxflow-documents.csv"' });
+  res.end(csv);
+}));
+api.get('/api/export/xls', requireAuth((req, res) => {
+  const xls = exporter.toXLS(filteredDocs(req), exportBrand(req.user));
+  logAudit(req.user.id, null, 'export', 'ส่งออก Excel', req.user.displayName);
+  res.writeHead(200, { 'Content-Type': 'application/vnd.ms-excel; charset=utf-8', 'Content-Disposition': 'attachment; filename="taxflow-documents.xls"' });
+  res.end('\uFEFF' + xls);
+}));
+
+/* =========================================================
+ *  DOCUMENT LIBRARY (คลังเอกสารตามหมวด — แยกตามบทบาท)
+ *  เก็บไฟล์เอกสารราชการ/ธุรกิจ เช่น ภ.ง.ด.90, ภ.พ.20, สัญญาจ้าง ฯลฯ
+ * ========================================================= */
+const LIB_ALLOWED_MIME = { 'application/pdf': 'pdf', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+const LIB_MAX_SIZE = 10 * 1024 * 1024; // 10 MB สำหรับเอกสารสแกน
+
+api.get('/api/library', requireAuth((req, res) => {
+  const url = new URL(req.url, 'http://localhost');
+  const category = url.searchParams.get('category');
+  const q = (url.searchParams.get('q') || '').toLowerCase();
+  const rows = store.all('library', (l) =>
+    l.userId === req.user.id &&
+    (!category || l.category === category) &&
+    (!q || `${l.title || ''}${l.filename || ''}${l.note || ''}`.toLowerCase().includes(q))
+  ).reverse().map((l) => { const { storedName, ...meta } = l; return meta; });
+  sendJson(res, 200, { count: rows.length, items: rows });
+}));
+
+api.post('/api/library', requireAuth(async (req, res) => {
+  const b = await readJsonBody(req);
+  if (!b.category) return sendJson(res, 400, { error: 'กรุณาเลือกหมวดเอกสาร' });
+  if (!b.dataBase64) return sendJson(res, 400, { error: 'ไม่พบไฟล์' });
+  if (!LIB_ALLOWED_MIME[b.mime]) return sendJson(res, 415, { error: 'รองรับเฉพาะไฟล์ PDF, PNG, JPG, WEBP' });
+  const buf = Buffer.from(b.dataBase64, 'base64');
+  if (buf.length > LIB_MAX_SIZE) return sendJson(res, 413, { error: 'ไฟล์มีขนาดเกิน 10 MB' });
+  const storedName = 'lib_' + crypto.randomBytes(12).toString('hex') + '.' + LIB_ALLOWED_MIME[b.mime];
+  fs.writeFileSync(path.join(store.UPLOAD_DIR, storedName), buf);
+  const row = store.insert('library', {
+    userId: req.user.id, category: b.category,
+    title: b.title || b.filename || 'เอกสาร', filename: b.filename || storedName,
+    mime: b.mime, size: buf.length, storedName, note: b.note || '',
+    year: b.year || String(new Date().getFullYear() + 543),
+  });
+  logAudit(req.user.id, null, 'library-add', `เพิ่มเอกสาร "${row.title}" ในคลัง (${b.category})`, req.user.displayName);
+  const { storedName: sn, ...meta } = row;
+  sendJson(res, 201, meta);
+}));
+
+api.get('/api/library/:id/file', requireAuth((req, res) => {
+  const l = store.find('library', req.params.id);
+  if (!l || l.userId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบไฟล์' });
+  try {
+    const buf = fs.readFileSync(path.join(store.UPLOAD_DIR, l.storedName));
+    res.writeHead(200, { 'Content-Type': l.mime, 'Content-Disposition': 'inline; filename="file"', 'Content-Length': buf.length });
+    res.end(buf);
+  } catch { sendJson(res, 404, { error: 'ไฟล์หาย' }); }
+}));
+
+api.delete('/api/library/:id', requireAuth((req, res) => {
+  const l = store.find('library', req.params.id);
+  if (!l || l.userId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบไฟล์' });
+  try { fs.unlinkSync(path.join(store.UPLOAD_DIR, l.storedName)); } catch {}
+  store.remove('library', l.id);
+  logAudit(req.user.id, null, 'library-del', `ลบเอกสาร "${l.title}" จากคลัง`, req.user.displayName);
+  sendJson(res, 200, { deleted: true });
+}));
+
+/* =========================================================
+ *  NOTIFICATIONS
+ * ========================================================= */
+api.get('/api/notifications', requireAuth((req, res) => {
+  const items = store.all('notifications', (n) => n.userId === req.user.id).reverse();
+  sendJson(res, 200, { items, unread: items.filter((n) => !n.read).length });
+}));
+api.post('/api/notifications/:id/read', requireAuth((req, res) => {
+  const n = store.find('notifications', req.params.id);
+  if (!n || n.userId !== req.user.id) return sendJson(res, 404, { error: 'not found' });
+  store.update('notifications', n.id, { read: true }); sendJson(res, 200, { ok: true });
+}));
+api.post('/api/notifications/read-all', requireAuth((req, res) => {
+  store.all('notifications', (n) => n.userId === req.user.id && !n.read).forEach((n) => store.update('notifications', n.id, { read: true }));
+  sendJson(res, 200, { ok: true });
+}));
+
+/* =========================================================
+ *  AUDIT LOG (account-wide)
+ * ========================================================= */
+api.get('/api/audit', requireAuth((req, res) => {
+  sendJson(res, 200, { items: store.all('audit_log', (a) => a.userId === req.user.id).reverse().slice(0, 200) });
+}));
+
+/* =========================================================
+ *  SUMMARIES
+ * ========================================================= */
+function statusCounts(docs) {
+  const c = { draft: 0, pending: 0, approved: 0, rejected: 0, cancelled: 0, archived: 0 };
+  docs.forEach((d) => { if (c[d.status] !== undefined) c[d.status]++; });
+  return c;
+}
+api.get('/api/creator/summary', requireAuth((req, res) => {
+  const docs = store.all('documents', (d) => d.userId === req.user.id && d.type === 'WHT');
+  const gross = docs.reduce((s, d) => s + (Number(d.base) || 0), 0);
+  const whtPaid = docs.reduce((s, d) => s + (Number(d.wht) || 0), 0);
+  sendJson(res, 200, { documentCount: docs.length, grossIncome: round2(gross), withholdingPaid: round2(whtPaid), estimate: tax.estimatePersonalIncomeTax(gross), status: statusCounts(docs) });
+}));
+api.get('/api/agency/summary', requireAuth((req, res) => {
+  const docs = store.all('documents', (d) => d.userId === req.user.id);
+  const etax = docs.filter((d) => d.type === 'ETAX'), ewht = docs.filter((d) => d.type === 'EWHT');
+  sendJson(res, 200, {
+    counts: { total: etax.length + ewht.length, eTaxInvoice: etax.length, eWithholding: ewht.length },
+    totals: { revenue: round2(etax.reduce((s, d) => s + (+d.total || 0), 0)), vat: round2(etax.reduce((s, d) => s + (+d.vat || 0), 0)), expense: round2(ewht.reduce((s, d) => s + (+d.base || 0), 0)), withholding: round2(ewht.reduce((s, d) => s + (+d.wht || 0), 0)) },
+    status: statusCounts(docs),
+  });
+}));
+
+/* =========================================================
+ *  STATIC
+ * ========================================================= */
+const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
+function serveStatic(req, res) {
+  let urlPath = decodeURIComponent(req.url.split('?')[0]);
+  if (urlPath === '/') urlPath = '/index.html';
+  const filePath = path.join(PUBLIC_DIR, path.normalize(urlPath));
+  if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); return res.end('Forbidden'); }
+  fs.readFile(filePath, (err, data) => {
+    if (err) { res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end('<h1>404</h1><a href="/">กลับหน้าแรก</a>'); }
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream' });
+    res.end(data);
+  });
+}
+
+http.createServer(async (req, res) => {
+  const urlPath = req.url.split('?')[0];
+  if (urlPath.startsWith('/api/')) {
+    const matched = api.match(req.method, urlPath);
+    if (!matched) return sendJson(res, 404, { error: 'ไม่พบ endpoint นี้' });
+    req.params = matched.params;
+    try { await matched.handler(req, res); }
+    catch (err) { console.error('API error:', err); sendJson(res, 500, { error: 'เกิดข้อผิดพลาดภายในระบบ' }); }
+    return;
+  }
+  serveStatic(req, res);
+}).listen(PORT, () => {
+  const seeded = seedUsers();
+  // PDPA มาตรา 37(3): ลบข้อมูลที่พ้นระยะเวลาเก็บรักษาแล้ว — ทำตอนเริ่มระบบและทุก 6 ชั่วโมง
+  const purged = pdpa.purgeExpired(store);
+  setInterval(() => pdpa.purgeExpired(store), 6 * 60 * 60 * 1000).unref();
+  console.log(`\n  TaxFlow running  ➜  http://localhost:${PORT}`);
+  console.log(`  ฐานข้อมูล (SQLite): ${path.relative(process.cwd(), store.DB_FILE)}`);
+  console.log(`  ผู้ใช้ในระบบ: ${store.count('users')} บัญชี | เอกสาร: ${store.count('documents')} | คลังเอกสาร: ${store.count('library')} | คู่ค้า: ${store.count('contacts')}`);
+  console.log(`  คู่มือการใช้งาน: http://localhost:${PORT}/guide.html`);
+  console.log(`  ล้างข้อมูลหมดอายุตามนโยบายเก็บรักษา: OTP ${purged.otpRemoved} รายการ, แจ้งเตือน ${purged.notifyRemoved} รายการ`);
+  if (seeded.length) {
+    console.log(`\n  สร้างบัญชีผู้ใช้ตัวอย่างให้แล้ว (เข้าสู่ระบบเพื่อทดลองได้ทันที):`);
+    for (const u of seeded) console.log(`    • ${u.email}  (${u.role})  รหัสผ่าน: ${u.password}`);
+  }
+  console.log('');
+});

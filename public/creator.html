@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TaxFlow — ผู้ผลิตเนื้อหาดิจิทัล</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Kanit:wght@500;600;700&family=Noto+Sans+Thai+Looped:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><img src="/img/logo.png" alt="TaxFlow" class="brand-logo"></div>
+    <div class="role-tag">อินฟลูเอนเซอร์ / ครีเอเตอร์</div>
+    <button class="nav-item active" data-view="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>ภาพรวม</button>
+    <div class="nav-group-label">เมนูหลัก</div>
+    <button class="nav-item" data-view="create"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>สร้างเอกสาร</button>
+    <button class="nav-item" data-view="add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>บันทึก 50 ทวิ (รับ)</button>
+    <button class="nav-item" data-view="inbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8l9 6 9-6"/><rect x="3" y="5" width="18" height="14" rx="2"/></svg>กล่องรับเอกสาร<span class="ntf-badge hidden" id="inbox-badge" style="position:static;margin-left:auto;">0</span></button>
+    <button class="nav-item" data-view="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h9l3 3v15H6V3z"/><path d="M9 12h6M9 16h6"/></svg>เอกสารทั้งหมด</button>
+    <button class="nav-item" data-view="pit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>ประมาณการภาษี</button>
+    <button class="nav-item" data-view="library"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5a2 2 0 012-2h12a2 2 0 012 2v14"/><path d="M4 19a2 2 0 002 2h12a2 2 0 002-2"/><path d="M9 7h6M9 11h6"/></svg>คลังเอกสาร</button>
+    <button class="nav-item" data-view="profile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>โปรไฟล์</button>
+    <div class="nav-links-extra">
+      <a href="/guide.html" target="_blank"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="width:14px;height:14px;vertical-align:-2px;margin-right:5px"><path d="M4 19.5A2.5 2.5 0 016.5 17H20V3H6.5A2.5 2.5 0 004 5.5v14z"/></svg>คู่มือการใช้งาน</a>
+      <a href="/laws.html" target="_blank"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="width:14px;height:14px;vertical-align:-2px;margin-right:5px"><path d="M12 3v18M8 21h8"/><path d="M5 7l7-2 7 2"/><path d="M5 7l-2.5 6a3 3 0 005 0L5 7zM19 7l-2.5 6a3 3 0 005 0L19 7z"/></svg>กฎหมายที่เกี่ยวข้อง</a>
+          <a href="/privacy.html" target="_blank"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="width:14px;height:14px;vertical-align:-2px;margin-right:5px"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/></svg>นโยบายความเป็นส่วนตัว</a>
+</div>
+    <div class="sidebar-foot">
+      <div class="user-mini"><div class="av" id="u-av">?</div><div><b id="u-name">—</b><small id="u-email"></small></div></div>
+      <button class="logout-btn" onclick="logout()">ออกจากระบบ</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div id="ntf-bell" style="position:relative">
+        <button class="bell-btn" onclick="toggleNtf()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="width:19px;height:19px"><path d="M18 9a6 6 0 10-12 0c0 6-2 7-2 7h16s-2-1-2-7z"/><path d="M10.5 20a1.7 1.7 0 003 0"/></svg><span class="ntf-badge hidden" id="ntf-badge">0</span></button>
+        <div class="ntf-dropdown hidden" id="ntf-dropdown">
+          <div class="ntf-head">การแจ้งเตือน <a onclick="readAllNtf()">อ่านทั้งหมด</a></div>
+          <div class="ntf-scroll" id="ntf-list"></div>
+        </div>
+      </div>
+    </div>
+    <!-- OVERVIEW -->
+    <section class="view active" id="v-overview">
+      <div class="dash-extra">
+        <div class="stats-grid" id="dash-stats"></div>
+        <div class="panel" id="dash-todo-panel" style="margin:14px 0 20px">
+          <div class="panel-title">งานที่ต้องดำเนินการ</div>
+          <div id="dash-todo"><p class="muted">กำลังโหลด…</p></div>
+        </div>
+      </div>
+      <div class="page-head"><div class="eyebrow">Creator workspace</div><h1>ภาพรวมรายได้</h1><p>สรุปเอกสารและประมาณการภาษีของคุณ</p></div>
+      <div class="stat-grid">
+        <div class="stat-card"><div class="label">เอกสารสะสม</div><div class="value" id="s-count">0</div><div class="sub">ฉบับ</div></div>
+        <div class="stat-card"><div class="label">รายได้รวม</div><div class="value accent" id="s-gross">฿0.00</div><div class="sub">ฐานภาษีทุกงาน</div></div>
+        <div class="stat-card"><div class="label">ถูกหัก ณ ที่จ่ายแล้ว</div><div class="value" id="s-wht">฿0.00</div><div class="sub">เครดิตภาษีล่วงหน้า</div></div>
+        <div class="stat-card"><div class="label">ประมาณการภาษีทั้งปี</div><div class="value" id="s-pit">฿0.00</div><div class="sub">หลังหักค่าใช้จ่าย</div></div>
+      </div>
+      <div class="table-wrap">
+        <table><thead><tr><th>เลขที่</th><th>ผู้จ่ายเงิน</th><th class="num">ฐานภาษี</th><th class="num">หัก ณ ที่จ่าย</th><th class="num">สุทธิ</th><th></th></tr></thead>
+        <tbody id="ov-body"></tbody></table>
+      </div>
+    </section>
+
+    <!-- ADD -->
+    <section class="view" id="v-add">
+      <div class="page-head"><div class="eyebrow">บันทึกเอกสารที่ได้รับ</div><h1>บันทึกหนังสือรับรองหัก ณ ที่จ่าย (50 ทวิ)</h1><p>เอกสารที่ <b>ผู้ว่าจ้างออกให้คุณ</b> — บันทึกเข้าระบบเพื่อรวมยอดรายได้และเครดิตภาษี (ต่างจาก "สร้างเอกสาร" ซึ่งเป็นเอกสารที่<b>คุณออกให้คู่ค้า</b>)</p></div>
+      <div class="panel" style="max-width:560px;">
+        <div class="field"><label>ผู้ว่าจ้าง / ผู้จ่ายเงิน</label><input id="c-payer" placeholder="เช่น บริษัท มีเดีย เอเจนซี่ จำกัด"></div>
+        <div class="field"><label>รายละเอียดงาน</label><input id="c-desc" value="ค่าจ้างผลิตเนื้อหา"></div>
+        <div class="field"><label>ประเภทเงินได้</label><select id="c-income"><option>มาตรา 40(2)</option><option>มาตรา 40(8)</option></select></div>
+        <div class="row">
+          <div class="field"><label>ยอดเงินก่อนหัก (บาท)</label><input id="c-amount" type="number" placeholder="12000" oninput="previewWht()"></div>
+          <div class="field"><label>อัตราภาษี (%)</label><input id="c-rate" type="number" value="3" oninput="previewWht()"></div>
+        </div>
+        <div class="result" id="c-preview"><div class="empty">กรอกยอดเงินเพื่อดูผลการคำนวณ</div></div>
+        <button class="btn btn-solid btn-block" style="margin-top:16px;" onclick="storeWht()">บันทึกเอกสาร</button>
+      </div>
+    </section>
+
+    <!-- DOCS -->
+    <section class="view" id="v-docs">
+      <div class="page-head"><div class="eyebrow">เอกสาร</div><h1>เอกสารทั้งหมด</h1><p>ค้นหา ดูรายละเอียด และออกเป็น PDF</p></div>
+      <div class="filter-bar">
+        <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg><input id="doc-search" placeholder="เลขที่ / ผู้จ่ายเงิน" oninput="loadDocs()"></div>
+        <select id="f-status" onchange="loadDocs()">
+          <option value="">ทุกสถานะ</option>
+          <option value="draft">แบบร่าง</option>
+          <option value="pending">รอตรวจสอบ</option>
+          <option value="approved">อนุมัติ</option>
+          <option value="rejected">ไม่อนุมัติ</option>
+          <option value="cancelled">ยกเลิก</option>
+          <option value="archived">เก็บถาวร</option>
+        </select>
+        <input type="date" id="f-from" onchange="loadDocs()" title="ตั้งแต่วันที่">
+        <input type="date" id="f-to" onchange="loadDocs()" title="ถึงวันที่">
+        <div class="export-row">
+          <a class="btn btn-ghost btn-sm" href="/api/export/csv" download>CSV</a>
+          <a class="btn btn-ghost btn-sm" href="/api/export/xls" download>Excel</a>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table><thead><tr><th>เลขที่</th><th>ประเภท</th><th>คู่ค้า</th><th class="num">ฐาน</th><th class="num">รวม</th><th>สถานะ</th><th></th></tr></thead>
+        <tbody id="doc-body"></tbody></table>
+      </div>
+    </section>
+
+    <!-- PIT -->
+    <section class="view" id="v-pit">
+      <div class="page-head"><div class="eyebrow">วางแผนภาษี</div><h1>ประมาณการภาษีเงินได้บุคคลธรรมดา</h1><p>คำนวณเบื้องต้น (ค่าใช้จ่ายเหมา 50% สูงสุด 100,000 + ลดหย่อนส่วนตัว 60,000)</p></div>
+      <div class="panel" style="max-width:560px;">
+        <div class="field"><label>รายได้รวมทั้งปี (บาท)</label><input id="p-gross" type="number" placeholder="480000"><div class="hint">หรือดึงยอดจากเอกสารที่บันทึกไว้</div></div>
+        <div style="display:flex;gap:8px;margin-bottom:16px;">
+          <button class="btn btn-ghost btn-sm" onclick="fillFromDocs()">ดึงยอดจากเอกสาร</button>
+          <button class="btn btn-solid btn-sm" onclick="estimatePit()">คำนวณภาษี</button>
+        </div>
+        <div class="result" id="p-result"><div class="empty">ยังไม่มีผลการคำนวณ</div></div>
+      </div>
+    </section>
+
+    <!-- PROFILE -->
+    <section class="view" id="v-profile">
+      <div class="page-head"><div class="eyebrow">บัญชี</div><h1>โปรไฟล์และการยืนยันตัวตน</h1>
+        <p>ข้อมูลชุดนี้จะถูกพิมพ์ลงบนเอกสารที่คุณออก และใช้ยืนยันตัวตนกับคู่ค้า</p></div>
+      <div id="profile-root"><div class="muted">กำลังโหลดโปรไฟล์…</div></div>
+    </section>
+
+    <!-- LIBRARY -->
+    <section class="view" id="v-library">
+      <div class="page-head"><div class="eyebrow">คลังเอกสาร</div><h1>คลังเอกสารตามหมวด</h1><p>เก็บ 50 ทวิ, ภ.ง.ด.90/94, ใบเสร็จ, Invoice และใบกำกับภาษี — ครบในที่เดียว</p></div>
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-title">เพิ่มเอกสารเข้าคลัง</div>
+          <div class="panel-sub">อัปโหลดไฟล์สแกน PDF หรือรูปถ่ายเอกสาร</div>
+          <div class="field"><label>หมวดเอกสาร *</label><select id="lib-cat"></select></div>
+          <div class="row">
+            <div class="field"><label>ชื่อเอกสาร</label><input id="lib-title" placeholder="เช่น 50 ทวิ จากบริษัท A"></div>
+            <div class="field"><label>ปีภาษี (พ.ศ.)</label><input id="lib-year" type="number" placeholder="2569"></div>
+          </div>
+          <div class="field"><label>หมายเหตุ</label><input id="lib-note" placeholder="รายละเอียดเพิ่มเติม (ถ้ามี)"></div>
+          <div class="dropzone" id="lib-dropzone" style="padding:18px">
+            <input type="file" id="lib-file" accept=".pdf,image/png,image/jpeg,image/webp" hidden>
+            <div class="dz-inner">
+              <div class="dz-icon">▲</div>
+              <div>ลากไฟล์มาวาง หรือ <a onclick="document.getElementById('lib-file').click()">เลือกไฟล์</a></div>
+              <small class="muted">PDF, PNG, JPG, WEBP · ไม่เกิน 10 MB</small>
+            </div>
+          </div>
+          <div id="lib-preview"></div>
+          <button class="btn btn-solid btn-block hidden" id="lib-save" style="margin-top:12px" onclick="saveLibrary()">บันทึกเข้าคลัง</button>
+        </div>
+        <div>
+          <div class="filter-bar" style="margin-bottom:12px">
+            <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg><input id="lib-search" placeholder="ค้นหาในคลัง" oninput="loadLibrary()"></div>
+            <select id="lib-filter" onchange="loadLibrary()"><option value="">ทุกหมวด</option></select>
+          </div>
+          <div class="lib-grid" id="lib-grid"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CREATE (ver5) -->
+    <section class="view" id="v-create">
+      <div class="page-head"><div class="eyebrow">สร้างเอกสาร</div><h1>สร้างเอกสารธุรกิจ</h1><p><b>"สร้างเอกสาร" = เอกสารที่คุณเป็นผู้ออกให้คู่ค้า</b> (ระบบออกเลขที่ให้อัตโนมัติ พิมพ์ A4 ได้ทันที) · ส่วนเอกสารที่ผู้อื่นออกให้คุณ ให้ใช้เมนู "บันทึก" หรือเก็บไฟล์ใน "คลังเอกสาร"</p></div>
+      <div class="stepper" id="cr-progress" style="justify-content:flex-start;margin-bottom:18px"></div>
+      <div class="restore-bar hidden" id="cr-restore"></div>
+      <div id="cr-step1-sec">
+        <div class="mlabel" style="margin-bottom:8px">ขั้นที่ 1 · เลือกจุดประสงค์การใช้งาน</div>
+        <div class="purpose-grid" id="cr-purpose"></div>
+      </div>
+      <div id="cr-step2-sec" class="hidden">
+        <div class="mlabel" style="margin-bottom:8px">ขั้นที่ 2 · เลือกประเภทเอกสาร <a style="font-size:12px;font-weight:600;color:var(--orange-deep);cursor:pointer;margin-left:8px" onclick="crGoStep(1)">← ย้อนกลับ</a></div>
+        <div class="cr-grid" id="cr-cards"></div>
+      </div>
+      <div class="callout" style="margin-top:14px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="width:15px;height:15px;vertical-align:-2px;margin-right:4px"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M12 11v5"/></svg>แบบฟอร์มราชการ (ภ.ง.ด.90/94/50/51/53, ภ.พ.20, ภ.พ.30, หนังสือรับรองนิติบุคคล ฯลฯ) เป็นเอกสารที่ออกโดยหน่วยงานรัฐ — เก็บไฟล์ที่ได้รับ/ยื่นแล้วไว้ในเมนู <b>"คลังเอกสาร"</b></div>
+      <div class="panel hidden" id="cr-form" style="max-width:680px;margin-top:18px;">
+        <div class="panel-title" id="cr-form-title">สร้างเอกสาร</div>
+        <div class="row">
+          <div class="field"><label id="cr-party-label">คู่ค้า *</label><div class="ac-wrap"><input id="cr-party" placeholder="เลือกจากสมุดคู่ค้า หรือพิมพ์ใหม่" autocomplete="off"><div class="ac-panel hidden" id="cr-party-ac"></div></div></div>
+          <div class="field"><label>เลขประจำตัวผู้เสียภาษี</label><input id="cr-taxid" placeholder="0000000000000"></div>
+        </div>
+        <div class="field"><label>ที่อยู่คู่ค้า</label><input id="cr-address" placeholder="สำหรับแสดงบนเอกสาร (ถ้ามี)"></div>
+        <div class="callout hidden" id="cr-hint" style="margin:4px 0 12px;"></div>
+
+        <div id="cr-inv-sec" class="hidden"><div class="field"><label>กำหนดชำระภายในวันที่</label><input id="cr-duedate" type="date"></div></div>
+        <div id="cr-qtn-sec" class="hidden"><div class="field"><label>ยืนราคา (วัน)</label><input id="cr-valid" type="number" value="30"></div></div>
+        <div id="cr-po-sec" class="hidden"><div class="field"><label>กำหนดส่งมอบภายในวันที่</label><input id="cr-podate" type="date"></div></div>
+        <div id="cr-dlv-sec" class="hidden"><div class="row">
+          <div class="field"><label>งวดงาน</label><input id="cr-phase" placeholder="เช่น งวดที่ 1/2"></div>
+          <div class="field"><label>วันที่ส่งมอบงาน</label><input id="cr-dlvdate" type="date"></div>
+        </div></div>
+        <div id="cr-poa-sec" class="hidden">
+          <div class="field"><label>ขอบเขตอำนาจที่มอบ *</label><textarea id="cr-poa-scope" rows="3" placeholder="เช่น ติดต่อประสานงาน เจรจา ทำสัญญาจ้าง Influencer และรับ-ส่งเอกสารภาษีแทนบริษัท ในแคมเปญ..."></textarea></div>
+          <div class="field"><label>มีผลถึงวันที่ (เว้นว่าง = จนกว่าจะเพิกถอน)</label><input id="cr-poa-until" type="date"></div>
+        </div>
+
+        <div id="cr-items-sec">
+          <label style="font-size:13px;font-weight:600;display:block;margin:6px 0 8px;">รายการ</label>
+          <div class="items-head"><span>รายละเอียด</span><span>จำนวน</span><span>ราคา/หน่วย</span><span></span></div>
+          <div id="cr-items"></div>
+          <button class="btn btn-ghost btn-sm" onclick="crAddItem()" style="margin:4px 0 10px;">+ เพิ่มรายการ</button>
+          <div id="cr-vat-sec"><label class="save-sig-check"><input type="checkbox" id="cr-vat-check" onchange="crPreview()"> รวมภาษีมูลค่าเพิ่ม (VAT 7%)</label></div>
+        </div>
+
+        <div id="cr-payment-sec" class="hidden">
+          <div class="row">
+            <div class="field"><label>ยอดเงินที่ชำระ (บาท) *</label><input id="cr-amount" type="number" oninput="crPreview()"></div>
+            <div class="field"><label>วิธีชำระ</label><select id="cr-method"><option>โอนเงินผ่านธนาคาร</option><option>เงินสด</option><option>เช็ค</option><option>พร้อมเพย์</option></select></div>
+          </div>
+          <div class="row">
+            <div class="field"><label>ชำระค่าอะไร</label><input id="cr-paydesc" placeholder="เช่น ค่าจ้างผลิตวิดีโอ งวดที่ 1"></div>
+            <div class="field"><label>เลขอ้างอิง</label><input id="cr-ref" placeholder="เลขที่รายการโอน (ถ้ามี)"></div>
+          </div>
+        </div>
+
+        <div id="cr-contract-sec" class="hidden">
+          <div class="field"><label>ขอบเขตงาน *</label><textarea id="cr-scope" rows="3" placeholder="เช่น ผลิตวิดีโอรีวิวสินค้า 2 คลิป ความยาวไม่ต่ำกว่า 3 นาที เผยแพร่บน TikTok และ Instagram"></textarea></div>
+          <div class="row">
+            <div class="field"><label>ค่าตอบแทนรวม (บาท) *</label><input id="cr-fee" type="number" oninput="crPreview()"></div>
+            <div class="field"><label>เงื่อนไขการชำระ</label><input id="cr-terms" placeholder="เช่น แบ่งจ่าย 2 งวด งวดละ 50%"></div>
+          </div>
+          <div class="row">
+            <div class="field"><label>วันเริ่มสัญญา</label><input id="cr-start" type="date"></div>
+            <div class="field"><label>วันสิ้นสุด</label><input id="cr-end" type="date"></div>
+          </div>
+        </div>
+
+        <div class="field"><label>หมายเหตุ</label><input id="cr-note" placeholder="ข้อความเพิ่มเติมบนเอกสาร (ถ้ามี)"></div>
+        <div class="result" id="cr-preview"><div class="empty">กรอกข้อมูลเพื่อดูยอดรวม</div></div>
+        <div class="btn-row" style="margin-top:16px;">
+          <button class="btn btn-ghost" onclick="crGoStep(2)">← ย้อนกลับ</button>
+          <button class="btn btn-solid" style="flex:1" onclick="crToReview()">ถัดไป: ตรวจสอบก่อนสร้าง →</button>
+        </div>
+      </div>
+
+      <div class="panel hidden" id="cr-review" style="max-width:680px;margin-top:18px;">
+        <div class="panel-title">ขั้นที่ 4 · ตรวจสอบและยืนยัน</div>
+        <div class="panel-sub">ตรวจความถูกต้องก่อนสร้าง — เอกสารจะถูกออกเลขที่ทันทีเมื่อยืนยัน</div>
+        <div id="cr-review-body"></div>
+        <div class="btn-row" style="margin-top:18px;">
+          <button class="btn btn-ghost" onclick="crGoStep(3)">← กลับไปแก้ไข</button>
+          <button class="btn btn-solid" style="flex:1" onclick="crSubmit()">ยืนยันสร้างเอกสาร</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- INBOX (ver6) -->
+    <section class="view" id="v-inbox">
+      <div class="page-head"><div class="eyebrow">รับเอกสาร</div><h1>กล่องรับเอกสาร</h1><p>เอกสารที่คู่ค้าส่งมาให้คุณลงนามหรือตรวจสอบ — ตอบกลับภายในกำหนดเวลา</p></div>
+      <div class="mlabel" style="margin-bottom:10px">รอดำเนินการ</div>
+      <div id="inbox-pending"></div>
+      <div class="mlabel" style="margin:22px 0 10px">ประวัติการตอบกลับ</div>
+      <div id="inbox-history"></div>
+    </section>
+  </main>
+</div>
+
+<script src="/js/common.js"></script>
+<script src="/js/documents.js"></script>
+<script src="/js/notify.js"></script>
+<script src="/js/library.js"></script>
+<script src="/js/create.js"></script>
+<script src="/js/requests.js"></script>
+<script src="/js/dashboard.js"></script>
+<script src="/js/profile.js"></script>
+<script src="/js/creator.js"></script>
+</body>
+</html>
