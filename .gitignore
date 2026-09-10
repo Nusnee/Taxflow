@@ -1,0 +1,8 @@
+node_modules/
+data/*.db
+data/*.db-journal
+data/session.key
+data/file.key
+data/mail.config.json
+data/uploads/*
+!data/uploads/.gitkeep

@@ -9,5 +9,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test"
+  },
+  "optionalDependencies": {
+    "pg": "^8.11.0"
   }
 }
