@@ -58,7 +58,7 @@ function renderModal(d) {
     <div class="modal modal-lg">
       <div class="modal-top">
         <div>
-          <div class="docno" style="font-size:13px">${d.docNo}</div>
+          <div class="docno" style="font-size:13px">${d.docNo ? esc(d.docNo) : 'แบบร่าง — ยังไม่ออกเลขที่'}</div>
           <h3>${DOC_LABEL[d.type] || d.type} ${statusChip(d.status)}</h3>
         </div>
         <button class="icon-btn" onclick="closeModal()">✕</button>
@@ -166,6 +166,9 @@ function renderTabInner(t, body) {
       <div class="btn-row" style="margin-top:18px;border-top:1px solid var(--line);padding-top:16px">
         <a class="btn btn-ghost btn-sm" href="/api/documents/${d.id}/pdf" target="_blank">เปิด PDF / พิมพ์</a>
         <button class="btn btn-ghost btn-sm" onclick="duplicateDoc(${d.id})">คัดลอกเป็นฉบับใหม่</button>
+        ${d.type === 'ETAX' && d.status === 'approved' ? `
+          <button class="btn btn-ghost btn-sm" onclick="issueAdjustmentNote(${d.id},'credit-note')">ออกใบลดหนี้</button>
+          <button class="btn btn-ghost btn-sm" onclick="issueAdjustmentNote(${d.id},'debit-note')">ออกใบเพิ่มหนี้</button>` : ''}
         ${d.status === 'draft' ? `<button class="btn btn-danger btn-sm" onclick="deleteDoc(${d.id})">ลบเอกสาร</button>` : ''}
       </div>`;
   }
@@ -404,7 +407,28 @@ async function saveEditGen(id) {
 async function duplicateDoc(id) {
   const { ok, data } = await api.post(`/api/documents/${id}/duplicate`, {});
   if (!ok) return toast(data.error || 'คัดลอกไม่สำเร็จ', 'err');
-  toast('คัดลอกเป็นเอกสารฉบับใหม่ ' + data.docNo + ' (แบบร่าง)');
+  toast('คัดลอกเป็นเอกสารฉบับใหม่แบบร่างแล้ว (ยังไม่ออกเลขที่จนกว่าจะส่ง/อนุมัติ)');
+  await openDoc(data.id);
+  onChangeCb && onChangeCb();
+}
+
+// ออกใบลดหนี้/ใบเพิ่มหนี้อ้างอิงใบกำกับภาษีนี้ (มาตรา 86/9, 86/10)
+async function issueAdjustmentNote(refDocId, kind) {
+  const isCredit = kind === 'credit-note';
+  const { creditNote, debitNote } = await api.get('/api/etax/adjustment-reasons');
+  const reasons = isCredit ? creditNote : debitNote;
+  const reason = await uiPrompt(
+    `เหตุผล (เลือกพิมพ์อย่างใดอย่างหนึ่ง): ${reasons.join(' / ')}`,
+    { title: isCredit ? 'ออกใบลดหนี้' : 'ออกใบเพิ่มหนี้', placeholder: reasons[0] });
+  if (!reason) return;
+  const amountStr = await uiPrompt('ระบุยอดเงินส่วนต่าง (ก่อน VAT) เป็นตัวเลข', { title: 'ยอดเงินส่วนต่าง', placeholder: '1000' });
+  if (!amountStr) return;
+  const amount = Number(amountStr);
+  if (!(amount > 0)) return toast('กรุณากรอกยอดเงินให้ถูกต้อง', 'err');
+  const { ok, data } = await api.post(`/api/etax/${kind}`, { refDocId, reason: reason.trim() || reasons[0], amount });
+  if (!ok) return toast((data.errors ? data.errors.join(' · ') : data.error) || 'ออกเอกสารไม่สำเร็จ', 'err');
+  toast((isCredit ? 'ออกใบลดหนี้' : 'ออกใบเพิ่มหนี้') + 'เรียบร้อย (แบบร่าง)');
+  closeModal();
   await openDoc(data.id);
   onChangeCb && onChangeCb();
 }

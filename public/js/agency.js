@@ -118,7 +118,7 @@ async function loadOverview() {
   document.getElementById('ov-body').innerHTML = items.slice(0, 6).map((d) => {
     const cp = d.buyer || d.payee || '-';
     const amt = d.type === 'ETAX' ? d.total : d.net;
-    return `<tr class="row-click" onclick="openDoc(${d.id})"><td class="docno">${d.docNo}</td><td>${badge(d.type)}</td><td>${cp}</td>
+    return `<tr class="row-click" onclick="openDoc(${d.id})"><td class="docno">${d.docNo || 'แบบร่าง'}</td><td>${badge(d.type)}</td><td>${cp}</td>
       <td class="num">${baht(amt)}</td><td>${statusChip(d.status)}${d.sentTo && d.status === 'pending' ? `<div class="sent-to">ส่งถึง ${esc(d.sentTo.name)}</div>` : ''}</td>
       <td class="actions" onclick="event.stopPropagation()"><a class="btn btn-ghost btn-sm" href="/api/documents/${d.id}/pdf" target="_blank">PDF</a></td></tr>`;
   }).join('') || emptyRow(6);
@@ -138,7 +138,7 @@ async function loadDocs() {
     const taxVal = d.type === 'ETAX' ? d.vat : d.wht;
     const total = d.type === 'ETAX' ? d.total : d.net;
     return `<tr class="row-click" onclick="openDoc(${d.id})">
-      <td class="docno">${d.docNo}</td><td>${badge(d.type)}</td><td>${cp}</td>
+      <td class="docno">${d.docNo || 'แบบร่าง'}</td><td>${badge(d.type)}</td><td>${cp}</td>
       <td class="num">${baht(d.base)}</td><td class="num">${baht(taxVal)}</td><td class="num">${baht(total)}</td>
       <td>${statusChip(d.status)}${d.sentTo && d.status === 'pending' ? `<div class="sent-to">ส่งถึง ${esc(d.sentTo.name)}</div>` : ''}</td>
       <td class="actions" onclick="event.stopPropagation()">

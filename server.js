@@ -148,6 +148,10 @@ function requireAuth(handler) {
 
 /* ---------- helpers: numbering, validation, audit, versions, notify ---------- */
 const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+// ข้อ: createdAt เป็นเวลา UTC เสมอ เอกสารที่สร้างช่วง 00:00–07:00 น. ตามเวลาไทย (Asia/Bangkok, UTC+7)
+// จะถูกแสดง/กรองผิดเป็นวันก่อนหน้า จึงต้องคำนวณ "วันที่ออกเอกสาร" ตามเขตเวลาไทยแยกไว้ต่างหาก
+const BKK_DATE_FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' });
+function bangkokDateStr(d = new Date()) { return BKK_DATE_FMT.format(d); } // คืนค่า YYYY-MM-DD ตามเวลาไทย
 // รูปลายเซ็นต้องเป็น data URI รูปภาพที่แน่นอนเท่านั้น (กัน XSS ผ่าน src="...")
 const SIGNATURE_IMAGE_RE = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$/;
 function isValidSignatureImage(v) {
@@ -168,7 +172,7 @@ function contentHash(doc) {
   }
   return crypto.createHash('sha256').update(JSON.stringify(obj)).digest('hex');
 }
-const PREFIX = { ETAX: 'TAX', EWHT: 'WHT', WHT: 'WHT', RECEIPT: 'RCP', INVOICE: 'INV', QUOTATION: 'QTN', PO: 'PO', DELIVERY: 'DLV', PAYMENT: 'PAY', CONTRACT_INF: 'CTR', CONTRACT_BRAND: 'CTB', POA: 'POA' };
+const PREFIX = { ETAX: 'TAX', EWHT: 'WHT', WHT: 'WHT', RECEIPT: 'RCP', INVOICE: 'INV', QUOTATION: 'QTN', PO: 'PO', DELIVERY: 'DLV', PAYMENT: 'PAY', CONTRACT_INF: 'CTR', CONTRACT_BRAND: 'CTB', POA: 'POA', CREDIT_NOTE: 'CN', DEBIT_NOTE: 'DN' };
 
 function makeDocNo(type, userId) {
   const prefix = PREFIX[type] || 'DOC';
@@ -716,11 +720,23 @@ api.post('/api/pdpa/delete-account', requireAuth(async (req, res) => {
     return sendJson(res, 400, { error: 'กรุณาพิมพ์ข้อความยืนยัน "ลบบัญชีของฉัน" ให้ถูกต้อง' });
   }
   const uid = req.user.id;
+  const oldEmail = req.user.email;
+  const oldName = req.user.displayName;
+  const ANON_LABEL = 'ผู้ใช้ที่ลบบัญชีแล้ว';
 
   // ลบไฟล์ทั้งหมดที่เป็นข้อมูลส่วนบุคคล
   for (const k of store.all('kyc_documents', (x) => x.userId === uid)) {
     filestore.removeFile(store.UPLOAD_DIR, k.storedName);
     store.remove('kyc_documents', k.id);
+  }
+  // ข้อ PDPA: การลบบัญชีเดิมตกหล่นคลังเอกสาร (library) และไฟล์แนบเอกสาร (attachments) — ต้องลบทั้งไฟล์และแถวด้วย
+  for (const l of store.all('library', (x) => x.userId === uid)) {
+    filestore.removeFile(store.UPLOAD_DIR, l.storedName);
+    store.remove('library', l.id);
+  }
+  for (const a of store.all('attachments', (x) => x.userId === uid)) {
+    try { fs.unlinkSync(path.join(store.UPLOAD_DIR, a.storedName)); } catch {}
+    store.remove('attachments', a.id);
   }
   for (const f of ['logoFile', 'sealFile']) {
     if (req.user[f] && req.user[f].storedName) filestore.removeFile(store.UPLOAD_DIR, req.user[f].storedName);
@@ -729,13 +745,32 @@ api.post('/api/pdpa/delete-account', requireAuth(async (req, res) => {
     for (const row of store.all(t, (x) => x.userId === uid)) store.remove(t, row.id);
   }
 
+  // ข้อ PDPA: doc_versions เป็น snapshot ของเอกสารภาษีที่ต้องเก็บไว้ตามกฎหมาย (5 ปี) จึงไม่ลบ
+  // แต่ชื่อผู้แก้ไข (editor) ที่ฝังไว้ตรงๆ ต้องล้างไม่ให้ระบุตัวตนเจ้าของบัญชีที่ลบไปแล้ว
+  const ownDocIds = new Set(store.all('documents', (x) => x.userId === uid).map((d) => d.id));
+  for (const v of store.all('doc_versions', (x) => ownDocIds.has(x.docId) && x.editor === oldName)) {
+    store.update('doc_versions', v.id, { editor: ANON_LABEL });
+  }
+  // audit_log ก็เก็บไว้เป็นร่องรอยตรวจสอบตามกฎหมาย แต่ต้องล้างชื่อ/อีเมลที่ระบุตัวตนออก
+  // (เช่น ข้อความ "ส่งรหัส OTP ไปที่ xxx@example.com" ที่ฝังอีเมลไว้ตรงๆ ในข้อความ)
+  for (const a of store.all('audit_log')) {
+    const isOwn = a.userId === uid && a.actor === oldName;
+    const mentionsEmail = oldEmail && a.detail && a.detail.includes(oldEmail);
+    if (!isOwn && !mentionsEmail) continue;
+    store.update('audit_log', a.id, {
+      actor: isOwn ? ANON_LABEL : a.actor,
+      detail: mentionsEmail ? a.detail.split(oldEmail).join('[อีเมลบัญชีที่ถูกลบ]') : a.detail,
+    });
+  }
+
   // ทำให้บัญชีไม่ระบุตัวตน แทนการลบทิ้งทั้งหมด เพราะเอกสารภาษีต้องเก็บ 5 ปี
   const anon = {
     ...profile.defaults(req.user.role),
     email: `deleted-${uid}@removed.local`,
     passwordHash: auth.hashPassword(crypto.randomBytes(24).toString('hex')),
-    displayName: 'ผู้ใช้ที่ลบบัญชีแล้ว', companyName: '', taxId: '',
+    displayName: ANON_LABEL, companyName: '', taxId: '',
     deleted: true, deletedAt: new Date().toISOString(),
+    tokenVersion: (req.user.tokenVersion || 0) + 1, // เพิกถอน session ที่ยังค้างอยู่ทุกอุปกรณ์ทันที
     consent: null, emailVerified: false, verifyStatus: 'unverified',
   };
   store.update('users', uid, anon);
@@ -815,14 +850,26 @@ api.delete('/api/contacts/:id', requireAuth((req, res) => {
  *  DOCUMENTS — create
  * ========================================================= */
 function createDoc(user, type, fields, extra) {
+  // ข้อ: ออกเลขที่เอกสารตั้งแต่ตอน "แบบร่าง" ทำให้การลบ draft ทิ้งช่องว่างในลำดับเลข (ผิดหลักการออกเลขต่อเนื่อง)
+  // จึงเลื่อนการออกเลขไปตอนที่เอกสารออกจากสถานะแบบร่างจริงๆ (ดู ensureIssued ด้านล่าง) — docNo เป็น null จนกว่าจะถึงตอนนั้น
   const doc = store.insert('documents', {
-    userId: user.id, type, docNo: makeDocNo(type, user.id),
+    userId: user.id, type, docNo: null,
     status: 'draft', signed: false, signature: null,
+    issueDate: bangkokDateStr(),
     ...fields,
   });
-  snapshotVersion(doc, user.displayName, 'สร้างเอกสาร');
-  logAudit(user.id, doc.id, 'create', `สร้าง ${doc.docNo}`, user.displayName);
+  snapshotVersion(doc, user.displayName, 'สร้างเอกสาร (แบบร่าง ยังไม่ออกเลขที่)');
+  logAudit(user.id, doc.id, 'create', `สร้างแบบร่างเอกสารประเภท ${type}`, user.displayName);
   return doc;
+}
+
+// ออกเลขที่เอกสารจริงตอนที่เอกสารออกจากสถานะ "แบบร่าง" เป็นครั้งแรก (ตอนส่ง/อนุมัติ)
+// ไม่ออกเลขให้เอกสารที่ยกเลิกตั้งแต่ยังเป็นแบบร่าง เพื่อไม่ให้เสียเลขที่ไปฟรีๆ
+function ensureIssued(doc, actorName) {
+  if (doc.docNo) return doc;
+  const updated = store.update('documents', doc.id, { docNo: makeDocNo(doc.type, doc.userId), issueDate: bangkokDateStr() });
+  logAudit(doc.userId, doc.id, 'issue', `ออกเลขที่เอกสาร ${updated.docNo}`, actorName || '');
+  return updated;
 }
 
 api.post('/api/etax/invoice', requireAuth(async (req, res) => {
@@ -866,6 +913,50 @@ api.post('/api/wht/store', requireAuth(async (req, res) => {
   });
   sendJson(res, 201, doc);
 }));
+
+/* =========================================================
+ *  ใบลดหนี้ / ใบเพิ่มหนี้ (ตามประมวลรัษฎากร มาตรา 86/9 และ 86/10)
+ *  ใช้แก้ไขใบกำกับภาษี (ETAX) ที่ออกไปแล้วอย่างถูกต้องตามกฎหมาย แทนการยกเลิกเอกสารทั้งฉบับ
+ * ========================================================= */
+const CREDIT_NOTE_REASONS = ['ลดราคาสินค้า/บริการ', 'สินค้าชำรุด/บกพร่อง', 'รับคืนสินค้า', 'คำนวณราคาผิดพลาดสูงไป', 'ยกเลิกสัญญาบางส่วน', 'อื่น ๆ'];
+const DEBIT_NOTE_REASONS = ['คำนวณราคาผิดพลาดต่ำไป', 'เรียกเก็บเพิ่มเติมตามสัญญา', 'อื่น ๆ'];
+
+function createAdjustmentNote(type, legalRef, reasons) {
+  return requireAuth(async (req, res) => {
+    const gate = profile.canIssue(req.user, 'ETAX');
+    if (!gate.ok) return sendJson(res, 403, { error: gate.error, missing: gate.missing });
+    const b = await readJsonBody(req);
+    const src = store.find('documents', b.refDocId);
+    if (!src || src.userId !== req.user.id || src.type !== 'ETAX') {
+      return sendJson(res, 404, { error: 'ไม่พบใบกำกับภาษีต้นฉบับ หรือไม่ใช่เอกสารของคุณ' });
+    }
+    // มาตรา 86/9, 86/10 ใช้แก้ไข "ใบกำกับภาษีที่ออกไปแล้ว" เท่านั้น ไม่ใช่แบบร่าง/เอกสารที่ยกเลิกไปแล้ว
+    if (!src.docNo || src.status === 'cancelled') {
+      return sendJson(res, 400, { error: 'ออกใบลดหนี้/เพิ่มหนี้ได้เฉพาะใบกำกับภาษีที่ออกเลขที่แล้วและยังไม่ถูกยกเลิกเท่านั้น' });
+    }
+    const errors = [];
+    if (!reasons.includes(b.reason)) errors.push('กรุณาเลือกเหตุผลที่ถูกต้องตามกฎหมาย');
+    const adjustBase = round2(Number(b.amount) || 0);
+    if (!(adjustBase > 0)) errors.push('กรุณาระบุยอดเงินส่วนต่างให้ถูกต้อง');
+    if (errors.length) return sendJson(res, 400, { error: 'ข้อมูลไม่ครบถ้วน', errors });
+    // ใช้อัตรา VAT เดียวกับใบกำกับภาษีต้นฉบับเสมอ ไม่รับอัตราจากผู้ใช้ตรงๆ (ตามหลักข้อ 8)
+    const vat = tax.calcVat(adjustBase, src.vatRate);
+    const doc = createDoc(req.user, type, {
+      docPurpose: ['self', 'send', 'record'].includes(b.docPurpose) ? b.docPurpose : 'self',
+      refDocId: src.id, refDocNo: src.docNo,
+      buyer: src.buyer || '', buyerTaxId: src.buyerTaxId || '',
+      reason: b.reason, note: b.note || '',
+      base: vat.base, vatRate: vat.rate, vat: vat.vat, total: vat.total,
+      legalRef, signatureStandard: 'PAdES (จำลอง)',
+    });
+    logAudit(req.user.id, doc.id, 'create', `ออก${type === 'CREDIT_NOTE' ? 'ใบลดหนี้' : 'ใบเพิ่มหนี้'}อ้างอิง ${src.docNo} (${b.reason})`, req.user.displayName);
+    sendJson(res, 201, doc);
+  });
+}
+
+api.get('/api/etax/adjustment-reasons', (req, res) => sendJson(res, 200, { creditNote: CREDIT_NOTE_REASONS, debitNote: DEBIT_NOTE_REASONS }));
+api.post('/api/etax/credit-note', createAdjustmentNote('CREDIT_NOTE', 'ประมวลรัษฎากร มาตรา 86/9', CREDIT_NOTE_REASONS));
+api.post('/api/etax/debit-note', createAdjustmentNote('DEBIT_NOTE', 'ประมวลรัษฎากร มาตรา 86/10', DEBIT_NOTE_REASONS));
 
 /* =========================================================
  *  เอกสารธุรกิจ + สัญญา (ver5): ใบเสร็จ/ใบแจ้งหนี้/ใบเสนอราคา/PO/ใบส่งมอบงาน/ใบสำคัญจ่าย/สัญญาจ้าง
@@ -961,7 +1052,7 @@ const reqPublic = (r) => {
 
 // ส่งเอกสารให้บัญชีอื่น (ระบุอีเมลผู้ใช้ในระบบ)
 api.post('/api/documents/:id/request', requireAuth(async (req, res) => {
-  const doc = ownDoc(req);
+  let doc = ownDoc(req);
   if (!doc) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
   const b = await readJsonBody(req);
   const email = String(b.toEmail || '').trim().toLowerCase();
@@ -981,8 +1072,10 @@ api.post('/api/documents/:id/request', requireAuth(async (req, res) => {
     purpose, message: b.message || '', dueDate: b.dueDate || '', signAs: b.signAs || '', status: 'sent',
   });
   if (doc.status === 'draft') {
+    doc = ensureIssued(doc, req.user.displayName); // ข้อ: ออกเลขที่จริงตอนส่งเอกสารออกจากแบบร่าง
     const updated = store.update('documents', doc.id, { status: 'pending' });
     snapshotVersion(updated, req.user.displayName, 'ส่งเอกสารให้คู่ค้า');
+    doc = updated;
   }
   logAudit(req.user.id, doc.id, 'send', `ส่ง ${doc.docNo} ถึง ${email} (${purpose === 'sign' ? 'ขอลายเซ็น' : 'ขอตรวจสอบ'}${b.dueDate ? ' ภายใน ' + b.dueDate : ''})`, req.user.displayName);
   const senderName = req.user.companyName || req.user.displayName;
@@ -1142,8 +1235,10 @@ api.get('/api/documents', requireAuth((req, res) => {
     (!status || d.status === status) &&
     (!q || (d.docNo || '').toLowerCase().includes(q) || JSON.stringify(d).toLowerCase().includes(q)) &&
     (!contact || (`${d.buyer || ''}${d.payee || ''}${d.payer || ''}`).toLowerCase().includes(contact)) &&
-    (!from || (d.createdAt || '').slice(0, 10) >= from) &&
-    (!to || (d.createdAt || '').slice(0, 10) <= to)
+    // ข้อ: กรองตาม "วันที่ออกเอกสาร" ตามเขตเวลาไทย (issueDate) แทน createdAt แบบ UTC ตรงๆ
+    // (เอกสารเก่าก่อนมีฟิลด์นี้ fallback ไปใช้ createdAt) กันเอกสารที่สร้างช่วงดึกตกไปอยู่วันก่อนหน้าผิดวัน
+    (!from || (d.issueDate || (d.createdAt || '').slice(0, 10)) >= from) &&
+    (!to || (d.issueDate || (d.createdAt || '').slice(0, 10)) <= to)
   ).reverse();
   const withReq = rows.map((d) => {
     const reqs = store.all('requests', (r) => r.docId === d.id);
@@ -1171,6 +1266,8 @@ api.put('/api/documents/:id', requireAuth(async (req, res) => {
   const doc = ownDoc(req);
   if (!doc) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
   if (['approved', 'archived', 'cancelled'].includes(doc.status)) return sendJson(res, 400, { error: 'เอกสารสถานะนี้แก้ไขไม่ได้' });
+  // ใบลดหนี้/ใบเพิ่มหนี้อ้างอิงใบกำกับภาษีต้นฉบับตามกฎหมาย ห้ามแก้ไขเนื้อหาภายหลัง — ยกเลิกแล้วออกใหม่แทน
+  if (['CREDIT_NOTE', 'DEBIT_NOTE'].includes(doc.type)) return sendJson(res, 400, { error: 'ใบลดหนี้/ใบเพิ่มหนี้แก้ไขไม่ได้ — หากข้อมูลผิดพลาดให้ยกเลิกเอกสารนี้แล้วออกฉบับใหม่' });
   const b = await readJsonBody(req);
   let patch = {};
   const errors = [];
@@ -1233,6 +1330,8 @@ api.post('/api/documents/:id/status', requireAuth(async (req, res) => {
   if (next === 'approved' && doc.status === 'pending' && (doc.docPurpose || 'self') === 'send') {
     return sendJson(res, 400, { error: 'เอกสารนี้ถูกส่งให้คู่ค้าลงนาม/ตรวจสอบแล้ว ต้องรอผลจากคู่ค้าเท่านั้น ไม่สามารถอนุมัติเองได้' });
   }
+  // ข้อ: ออกเลขที่จริงตอนเอกสารออกจากสถานะแบบร่างเป็นครั้งแรก (ยกเว้นยกเลิกตั้งแต่ยังเป็นแบบร่าง — ไม่ต้องออกเลข)
+  if (doc.status === 'draft' && next !== 'cancelled') ensureIssued(doc, req.user.displayName);
   const updated = store.update('documents', doc.id, { status: next, statusNote: b.note || '' });
   if (next === 'cancelled') {
     const cancelledAt = new Date().toISOString();
@@ -1243,7 +1342,7 @@ api.post('/api/documents/:id/status', requireAuth(async (req, res) => {
   }
   snapshotVersion(updated, req.user.displayName, `เปลี่ยนสถานะเป็น ${STATUS_LABEL[next]}`);
   logAudit(req.user.id, doc.id, 'status', `${STATUS_LABEL[doc.status]} → ${STATUS_LABEL[next]}`, req.user.displayName);
-  const notifyMap = { approved: `เอกสาร ${doc.docNo} ได้รับการอนุมัติ`, rejected: `เอกสาร ${doc.docNo} ถูกตีกลับ (ไม่อนุมัติ)`, pending: `เอกสาร ${doc.docNo} ถูกส่งเข้ารอตรวจสอบ` };
+  const notifyMap = { approved: `เอกสาร ${updated.docNo} ได้รับการอนุมัติ`, rejected: `เอกสาร ${updated.docNo} ถูกตีกลับ (ไม่อนุมัติ)`, pending: `เอกสาร ${updated.docNo} ถูกส่งเข้ารอตรวจสอบ` };
   if (notifyMap[next]) notify(req.user.id, next, notifyMap[next], doc.id);
   sendJson(res, 200, updated);
 }));
@@ -1490,8 +1589,8 @@ api.post('/api/library', requireAuth(async (req, res) => {
   const buf = Buffer.from(b.dataBase64, 'base64');
   if (buf.length > LIB_MAX_SIZE) return sendJson(res, 413, { error: 'ไฟล์มีขนาดเกิน 5 MB' });
   if (!magicbytes.matches(buf, b.mime)) return sendJson(res, 415, { error: 'ไฟล์ไม่ตรงกับชนิดที่แจ้ง กรุณาอัปโหลดไฟล์จริง' });
-  const storedName = 'lib_' + crypto.randomBytes(12).toString('hex') + '.' + LIB_ALLOWED_MIME[b.mime];
-  fs.writeFileSync(path.join(store.UPLOAD_DIR, storedName), buf);
+  // ข้อ PDPA: ไฟล์ในคลังเอกสาร (เช่น ภ.ง.ด.90) อ่อนไหวพอๆ กับเอกสาร KYC จึงต้องเข้ารหัสแบบเดียวกัน
+  const storedName = filestore.writeEncrypted(store.UPLOAD_DIR, buf, LIB_ALLOWED_MIME[b.mime]);
   const row = store.insert('library', {
     userId: req.user.id, category: b.category,
     title: b.title || b.filename || 'เอกสาร', filename: b.filename || storedName,
@@ -1507,7 +1606,7 @@ api.get('/api/library/:id/file', requireAuth((req, res) => {
   const l = store.find('library', req.params.id);
   if (!l || l.userId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบไฟล์' });
   try {
-    const buf = fs.readFileSync(path.join(store.UPLOAD_DIR, l.storedName));
+    const buf = filestore.readEncrypted(store.UPLOAD_DIR, l.storedName);
     res.writeHead(200, { 'Content-Type': l.mime, 'Content-Disposition': 'inline; filename="file"', 'Content-Length': buf.length });
     res.end(buf);
   } catch { sendJson(res, 404, { error: 'ไฟล์หาย' }); }
@@ -1516,7 +1615,7 @@ api.get('/api/library/:id/file', requireAuth((req, res) => {
 api.delete('/api/library/:id', requireAuth((req, res) => {
   const l = store.find('library', req.params.id);
   if (!l || l.userId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบไฟล์' });
-  try { fs.unlinkSync(path.join(store.UPLOAD_DIR, l.storedName)); } catch {}
+  filestore.removeFile(store.UPLOAD_DIR, l.storedName);
   store.remove('library', l.id);
   logAudit(req.user.id, null, 'library-del', `ลบเอกสาร "${l.title}" จากคลัง`, req.user.displayName);
   sendJson(res, 200, { deleted: true });
@@ -1558,7 +1657,7 @@ api.get('/api/creator/summary', requireAuth((req, res) => {
   const docs = store.all('documents', (d) => d.userId === req.user.id && d.type === 'WHT');
   const gross = docs.reduce((s, d) => s + (Number(d.base) || 0), 0);
   const whtPaid = docs.reduce((s, d) => s + (Number(d.wht) || 0), 0);
-  sendJson(res, 200, { documentCount: docs.length, grossIncome: round2(gross), withholdingPaid: round2(whtPaid), estimate: tax.estimatePersonalIncomeTax(gross), status: statusCounts(docs) });
+  sendJson(res, 200, { documentCount: docs.length, grossIncome: round2(gross), withholdingPaid: round2(whtPaid), estimate: tax.estimatePersonalIncomeTax(gross, { withholdingPaid: whtPaid }), status: statusCounts(docs) });
 }));
 api.get('/api/agency/summary', requireAuth((req, res) => {
   const docs = store.all('documents', (d) => d.userId === req.user.id);

@@ -95,6 +95,7 @@ const DOC_LABEL = {
   RECEIPT: 'ใบเสร็จรับเงิน', INVOICE: 'ใบแจ้งหนี้', QUOTATION: 'ใบเสนอราคา',
   PO: 'ใบสั่งซื้อ (PO)', DELIVERY: 'ใบส่งมอบงาน', PAYMENT: 'ใบสำคัญจ่าย',
   CONTRACT_INF: 'สัญญาจ้าง Influencer', CONTRACT_BRAND: 'สัญญากับแบรนด์', POA: 'หนังสือมอบอำนาจ',
+  CREDIT_NOTE: 'ใบลดหนี้', DEBIT_NOTE: 'ใบเพิ่มหนี้',
 };
 const STATUS_LABEL = { issued: 'ออกแล้ว', stored: 'จัดเก็บแล้ว' };
 function badge(type) {
