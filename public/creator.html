@@ -75,7 +75,15 @@
         <div class="field"><label>ประเภทเงินได้</label><select id="c-income"><option>มาตรา 40(2)</option><option>มาตรา 40(8)</option></select></div>
         <div class="row">
           <div class="field"><label>ยอดเงินก่อนหัก (บาท)</label><input id="c-amount" type="number" placeholder="12000" oninput="previewWht()"></div>
-          <div class="field"><label>อัตราภาษี (%)</label><input id="c-rate" type="number" value="3" oninput="previewWht()"></div>
+          <div class="field"><label>อัตราภาษี (%)</label>
+            <select id="c-rate" onchange="previewWht()">
+              <option value="1">1%</option>
+              <option value="2">2%</option>
+              <option value="3" selected>3%</option>
+              <option value="5">5%</option>
+              <option value="10">10%</option>
+              <option value="15">15%</option>
+            </select></div>
         </div>
         <div class="result" id="c-preview"><div class="empty">กรอกยอดเงินเพื่อดูผลการคำนวณ</div></div>
         <button class="btn btn-solid btn-block" style="margin-top:16px;" onclick="storeWht()">บันทึกเอกสาร</button>
@@ -111,9 +119,16 @@
 
     <!-- PIT -->
     <section class="view" id="v-pit">
-      <div class="page-head"><div class="eyebrow">วางแผนภาษี</div><h1>ประมาณการภาษีเงินได้บุคคลธรรมดา</h1><p>คำนวณเบื้องต้น (ค่าใช้จ่ายเหมา 50% สูงสุด 100,000 + ลดหย่อนส่วนตัว 60,000)</p></div>
+      <div class="page-head"><div class="eyebrow">วางแผนภาษี</div><h1>ประมาณการภาษีเงินได้บุคคลธรรมดา</h1><p>คำนวณเบื้องต้น (หักลดหย่อนส่วนตัว 60,000 บาท — เลือกประเภทเงินได้เพื่อใช้อัตราหักค่าใช้จ่ายที่ถูกต้อง)</p></div>
       <div class="panel" style="max-width:560px;">
+        <div class="field"><label>ประเภทเงินได้</label>
+          <select id="p-income-type">
+            <option value="40(2)">มาตรา 40(2) — ค่าจ้าง/ค่านายหน้า (หัก 50% ไม่เกิน 100,000 บาท)</option>
+            <option value="40(8)">มาตรา 40(8) — รับจ้างทำของ/ธุรกิจอิสระ (หัก 60% ไม่มีเพดาน)</option>
+          </select>
+        </div>
         <div class="field"><label>รายได้รวมทั้งปี (บาท)</label><input id="p-gross" type="number" placeholder="480000"><div class="hint">หรือดึงยอดจากเอกสารที่บันทึกไว้</div></div>
+        <div class="field"><label>ภาษีที่ถูกหัก ณ ที่จ่ายไว้แล้วทั้งปี (บาท)</label><input id="p-wht" type="number" placeholder="0"><div class="hint">ใช้หักลบจากภาษีที่คำนวณได้ เพื่อดูว่าต้องชำระเพิ่มหรือได้คืน</div></div>
         <div style="display:flex;gap:8px;margin-bottom:16px;">
           <button class="btn btn-ghost btn-sm" onclick="fillFromDocs()">ดึงยอดจากเอกสาร</button>
           <button class="btn btn-solid btn-sm" onclick="estimatePit()">คำนวณภาษี</button>

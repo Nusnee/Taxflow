@@ -343,8 +343,22 @@ async function savePfProfile() {
     phone: pfv('pf-phone'),
     bank: { bankName: pfq('pf-bank-name').value, accountNo: pfv('pf-bank-no'), accountName: pfv('pf-bank-acc') },
   };
-  const { ok, data } = await api.put('/api/auth/profile', body);
-  if (!ok) return toast(data.error || 'บันทึกไม่สำเร็จ', 'err');
+  // เปลี่ยนบัญชีธนาคารรับเงินต้องยืนยันด้วย OTP ก่อนเสมอ (ช่องทางหลักของการโกงเปลี่ยนบัญชีรับเงิน)
+  const bankChanged = JSON.stringify(body.bank) !== JSON.stringify((PF_USER && PF_USER.bank) || {});
+  let data;
+  if (bankChanged) {
+    data = await otpGate({
+      purpose: 'change-bank',
+      title: 'ยืนยันการเปลี่ยนบัญชีธนาคารรับเงิน',
+      subtitle: 'เพื่อความปลอดภัยของบัญชีรับเงิน ระบบส่งรหัสยืนยัน 6 หลักไปที่',
+      action: (otpId, code) => api.put('/api/auth/profile', { ...body, otpId, code }),
+    });
+    if (!data) return; // ผู้ใช้ยกเลิกการยืนยัน
+  } else {
+    const { ok, data: d } = await api.put('/api/auth/profile', body);
+    if (!ok) return toast(d.error || 'บันทึกไม่สำเร็จ', 'err');
+    data = d;
+  }
   PF_USER = data.user;
   PROFILE_META = data.profile;
   if (typeof ME !== 'undefined') ME = data.user;

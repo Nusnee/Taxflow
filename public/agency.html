@@ -81,7 +81,7 @@
         <div id="e-items"></div>
         <button class="btn btn-ghost btn-sm" onclick="addItem()" style="margin:4px 0 16px;">+ เพิ่มรายการ</button>
         <div class="row">
-          <div class="field"><label>อัตรา VAT (%)</label><input id="e-vat" type="number" value="7" oninput="previewEtax()"></div>
+          <div class="field"><label>อัตรา VAT (%)</label><input id="e-vat" type="number" value="7" readonly disabled title="อัตรา VAT ตามกฎหมายกำหนดไว้ที่ 7%"></div>
           <div class="field"></div>
         </div>
         <div class="result" id="e-preview"><div class="empty">เพิ่มรายการเพื่อดูยอดรวม</div></div>
@@ -103,7 +103,15 @@
         </div>
         <div class="row">
           <div class="field"><label>ยอดเงินก่อนหัก (บาท)</label><input id="w-amount" type="number" placeholder="12000" oninput="previewEwht()"></div>
-          <div class="field"><label>อัตราภาษี (%)</label><input id="w-rate" type="number" value="3" oninput="previewEwht()"></div>
+          <div class="field"><label>อัตราภาษี (%)</label>
+            <select id="w-rate" onchange="previewEwht()">
+              <option value="1">1%</option>
+              <option value="2">2%</option>
+              <option value="3" selected>3%</option>
+              <option value="5">5%</option>
+              <option value="10">10%</option>
+              <option value="15">15%</option>
+            </select></div>
         </div>
         <div class="result" id="w-preview"><div class="empty">กรอกยอดเงินเพื่อดูผลการคำนวณ</div></div>
         <button class="btn btn-solid btn-block" style="margin-top:16px;" onclick="issueEwht()">ออกหนังสือรับรอง</button>

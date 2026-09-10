@@ -1,5 +1,71 @@
 # TaxFlow — ระบบจัดการภาษีและเอกสารอิเล็กทรอนิกส์ (ระบบต้นแบบ)
 
+## ใหม่ใน ver15 (แก้ช่องโหว่ความปลอดภัย + ตรรกะเอกสารภาษี + PostgreSQL)
+
+ปรับปรุงจากผลตรวจสอบความปลอดภัย/ตรรกะทางภาษีรอบ ver15 ทั้งหมด เรียงตามลำดับที่แนะนำ
+(ช่องโหว่ที่โจมตีได้ทันที → ตรรกะเอกสารภาษี → ความปลอดภัย/PDPA ทั่วไป → สถาปัตยกรรม)
+
+**ช่องโหว่ร้ายแรง**
+* **เซิร์ฟเวอร์ล่มได้ด้วย request เดียว** — `decodeURIComponent()` ใน `router.js`/`serveStatic()`
+  โยน `URIError` ที่ไม่มีใครจับ ทำให้โปรเซสทั้งตัวตายทันที แก้ด้วย try/catch คืน 400 แทน
+* **Stored XSS สองจุด** — ลายเซ็นที่คู่ค้าส่งมา (`image`) ไม่ได้ตรวจรูปแบบก่อนฝังใน `<img src>` ของเอกสาร,
+  และหน้ากล่องรับเอกสาร/รายการเอกสารแสดงชื่อ/ข้อความ/เหตุผลตีกลับจากคู่ค้าผ่าน `innerHTML` โดยไม่ escape
+  แก้โดยตรวจรูปแบบ `data:image/(png|jpeg|webp);base64,...` เข้มงวดทุก endpoint ที่รับรูปลายเซ็น
+  และเพิ่มฟังก์ชัน `esc()` ใน `public/js/common.js` ใช้กับข้อมูลจากคู่ค้าทุกจุดที่แสดงผ่าน `innerHTML`
+* **`SESSION_SECRET` มีค่า default ฝังในโค้ด** — เปลี่ยนเป็นสุ่มแล้วเก็บลง `data/session.key`
+  (แบบเดียวกับ `data/file.key`) และ `devCode` (โชว์รหัส OTP กลับใน response) เปิดใช้เฉพาะเมื่อตั้ง
+  `TAXFLOW_DEV=1` อย่างชัดเจนเท่านั้น ไม่ใช่แค่ไม่ได้ตั้งค่าอีเมลผู้ส่ง
+
+**ตรรกะเอกสารภาษี**
+* เลขที่เอกสาร `EWHT`/`WHT` ใช้ prefix `WHT` ซ้ำกันแต่นับแยกกัน ทำให้ได้เลขซ้ำ — เปลี่ยน counter key เป็น
+  `userId_prefix_ปี` และย้ายการออกเลขไปตอนเอกสารออกจากสถานะแบบร่างจริง ๆ (ส่ง/อนุมัติ) แทนตอนสร้าง draft
+  กันการลบ draft ทิ้งช่องว่างในลำดับเลข
+* `DELETE /api/documents/:id` ลบได้เฉพาะสถานะ **แบบร่าง** เท่านั้น สถานะอื่นต้อง "ยกเลิก" พร้อมเหตุผล
+* เจ้าของเอกสารเปลี่ยนสถานะเป็น "อนุมัติ" เองไม่ได้อีกต่อไปเมื่อเอกสารถูกส่งให้คู่ค้าแล้ว — การอนุมัติผูกกับ
+  การกระทำของคู่ค้าจริง (คู่ค้าลงนาม/ตรวจผ่าน → อนุมัติ, ตีกลับ → ไม่อนุมัติ) และยกเลิกเอกสารจะยกเลิกคำขอ
+  ลงนาม/ตรวจสอบที่ค้างอยู่ไปด้วย กันคู่ค้าลงนามเอกสารที่ถูกยกเลิกไปแล้ว
+* เก็บแฮช SHA-256 ของเนื้อหาเอกสาร ณ ตอนลงนาม แก้ไขเอกสารที่ลงนามแล้วจะล้างลายเซ็นทิ้งอัตโนมัติแทนที่จะ
+  ปล่อยให้ลายเซ็นเดิมติดอยู่กับเนื้อหาใหม่ หน้า verify แสดงผลเทียบแฮชให้เห็นว่าเนื้อหาถูกแก้ไขหรือไม่
+* `profile.canIssue()` ตรวจ `verifyStatus === 'verified'` ก่อนอนุญาตออกเอกสารทุกประเภท (เดิมข้ามการตรวจนี้
+  ทั้งหมด) และปิดช่องที่ข้าม gate ได้ (`/api/docs/create` ตอนรวม VAT, `/api/wht/store`, `/duplicate`)
+* ล็อกอัตรา VAT ไว้ที่ 7% และอัตราหัก ณ ที่จ่ายไว้ที่ชุด `{1,2,3,5,10,15}` เสมอ ไม่รับอัตราจากผู้ใช้ตรง ๆ,
+  บังคับ `qty > 0` และราคาไม่ติดลบในทุกรายการสินค้า, ตรวจ check digit เลขผู้เสียภาษีคู่ค้าเมื่อกรอกมา,
+  และแก้ไขเอกสารผ่าน `PUT` เรียก validation ชุดเดียวกับตอนสร้างเอกสารแล้ว
+* เพิ่ม **ใบลดหนี้/ใบเพิ่มหนี้** (ประมวลรัษฎากร มาตรา 86/9, 86/10) สำหรับแก้ไขใบกำกับภาษีที่ออกไปแล้ว
+  อย่างถูกต้องตามกฎหมาย แทนที่จะทำได้แค่ยกเลิกทั้งฉบับ
+* เพิ่มฟิลด์ `issueDate` (วันที่ตามเขตเวลาไทย Asia/Bangkok) ใช้กรองรายการและแสดงบนเอกสาร แทนการตัด
+  `createdAt` แบบ UTC ตรง ๆ ซึ่งทำให้เอกสารที่สร้างช่วง 00:00–07:00 น. ตกไปอยู่วันก่อนหน้า
+* บันทึก `cancelledAt`/`cancelReason` แยกจาก `updatedAt` ตอนยกเลิกเอกสาร
+* ประมาณการภาษีเงินได้บุคคลธรรมดาให้เลือกประเภทเงินได้ (มาตรา 40(2) หรือ 40(8) — อัตราหักค่าใช้จ่ายต่างกัน)
+  และหักภาษีที่ถูกหัก ณ ที่จ่ายไว้แล้วออกจากยอด เพื่อแสดงว่าต้องชำระเพิ่มหรือได้คืน
+
+**ความปลอดภัยและ PDPA**
+* จำกัดจำนวนครั้ง (rate limit) ที่ `/api/auth/login`, `/api/auth/register`, `/api/otp/request`
+  (`lib/ratelimit.js`) และจำกัดจำนวนครั้งขอรหัส OTP ใหม่ทั้งหมดต่อรายการ ไม่ใช่แค่ cooldown ระหว่างครั้ง
+* เพิ่ม `tokenVersion` ให้ผู้ใช้ — เพิ่มค่าเมื่อออกจากระบบทุกอุปกรณ์ (`/api/auth/logout-all` ใหม่) หรือลบบัญชี
+  เพื่อเพิกถอน session เดิมทันทีแม้ยังไม่หมดอายุ และ `requireAuth` ตรวจ `user.deleted` ด้วย
+* `readJsonBody` เก็บ chunk เป็น `Buffer[]` แล้วค่อย `Buffer.concat` ตอนจบ (เดิมต่อ Buffer เป็น string
+  ทีละ chunก ทำให้ตัวอักษรไทยที่ตกตรงรอยต่อ chunk เพี้ยน) และจำกัดขนาด body สูงสุด
+* ตรวจ magic bytes ของไฟล์อัปโหลดทุกจุด (`lib/magicbytes.js`) ไม่เชื่อ MIME type จาก client อย่างเดียว
+* เปลี่ยนบัญชีธนาคารรับเงินต้องยืนยันด้วย OTP ก่อนเสมอ (ช่องทางหลักของการโกงเปลี่ยนบัญชีรับเงิน)
+* บัญชีที่ไม่ยืนยันอีเมลภายใน 24 ชม. ถูกลบทิ้งอัตโนมัติ ปลดอีเมล/เลขผู้เสียภาษีที่ถูกจองไว้ตลอดกาลคืน
+* เติม `'` นำหน้าค่าที่ขึ้นต้นด้วย `= + - @` ในไฟล์ CSV/Excel ที่ส่งออก กัน formula injection
+* URL ใน QR/ลิงก์ตรวจสอบเอกสารใช้ `PUBLIC_BASE_URL` แทน header `Host` ที่ผู้ร้องขอกำหนดเองได้
+* แอดมินอนุมัติ/ไม่อนุมัติได้เฉพาะบัญชีที่ส่งเอกสารขอตรวจสอบแล้ว (`verifyStatus=pending`) และสถานะ
+  รายเอกสารใน `kyc_documents` อัปเดตตามผลตรวจแล้ว (เดิมค้างเป็น `pending` ตลอดไป)
+* สิทธิขอลบบัญชี (PDPA มาตรา 33) ครอบคลุมคลังเอกสาร (`library`) และไฟล์แนบ (`attachments`) ที่เดิมตกหล่น
+  ทั้งไฟล์และแถวข้อมูล, ล้างชื่อ/อีเมลที่ฝังอยู่ใน `doc_versions`/`audit_log` ออกด้วย, ไฟล์ในคลังเอกสาร
+  เข้ารหัสแบบเดียวกับเอกสาร KYC แล้ว, และขนาดไฟล์สูงสุดของคลังเอกสารแก้เป็น 5 MB ให้ตรงกับสเปก
+
+**สถาปัตยกรรม**
+* สร้างดัชนีจริงให้คอลัมน์ที่เคยประกาศไว้เฉย ๆ ใน `INDEXED` และเพิ่ม `store.where()`/`store.whereOne()`
+  ให้ query ผ่าน SQL แทนการโหลดทั้งตารางมากรองด้วย JavaScript ทุกครั้ง — ใช้กับ login/สมัครสมาชิก/ส่ง
+  เอกสารหาอีเมลแล้ว
+* เพิ่ม `store.transaction()` ครอบขั้นตอนที่ต้องสำเร็จทั้งหมดหรือไม่เลย (ใช้กับการลบบัญชี)
+* เพิ่มชุดทดสอบด้วย `node:test` (`npm test`) เริ่มจาก `tax.js`, `thaiid.js`, `otp.js` ตามที่แนะนำ
+* เพิ่มทางเลือกต่อฐานข้อมูล **PostgreSQL** จริง (`lib/store.pg.js` + `sql/postgres-schema.sql`)
+  พร้อมขั้นตอนติดตั้งละเอียด — ดูหัวข้อ [ต่อฐานข้อมูล PostgreSQL](#ต่อฐานข้อมูล-postgresql) ด้านล่าง
+
 ## ใหม่ใน ver14 (โปรไฟล์แยกบทบาท + ยืนยันตัวตน + โลโก้บนเอกสาร + PDPA)
 
 ### 1) หน้าลงทะเบียนใหม่ แยกข้อมูลตามบทบาท
@@ -232,7 +298,14 @@ ver14 เพิ่ม `purpose: 'register'` — สมัครแล้วบ�
 
 ```bash
 node server.js
+# หรือ
+npm start
 ```
+
+รันครั้งแรกจะสร้างคีย์เซ็น session (`data/session.key`) และคีย์เข้ารหัสไฟล์ (`data/file.key`) ให้อัตโนมัติ
+ถ้าไม่ได้ตั้งค่าผ่าน environment variable — **อย่าลบไฟล์สองไฟล์นี้** มิฉะนั้น session เดิมและเอกสาร KYC/คลัง
+เอกสารเดิมทั้งหมดจะใช้งาน/เปิดไม่ได้อีก (ดูหัวข้อ [ตัวแปรแวดล้อม](#ตัวแปรแวดล้อม) สำหรับการตั้งค่าที่แนะนำ
+ก่อนใช้งานจริง)
 
 เมื่อรันครั้งแรก ระบบจะสร้างฐานข้อมูล SQLite (`data/taxflow.db`) และเพิ่มบัญชีผู้ใช้ตัวอย่างให้อัตโนมัติ พร้อมแสดงข้อมูลตอนรัน:
 
@@ -256,6 +329,33 @@ node server.js
 | เอเจนซี่ / องค์กร | `agency@taxflow.test` | `123456` |
 
 > หากต้องการล้างฐานข้อมูลเพื่อเริ่มใหม่ ให้ลบไฟล์ `data/taxflow.db` แล้วรันใหม่อีกครั้ง
+
+## ตัวแปรแวดล้อม
+
+ทุกตัวเป็นตัวเลือก (ไม่ตั้งค่าก็รันได้ทันทีสำหรับพัฒนา/สาธิต) แต่ **ควรตั้งค่าก่อนใช้งานจริง**:
+
+| ตัวแปร | ใช้ทำอะไร | ค่าเริ่มต้นถ้าไม่ตั้ง |
+|---|---|---|
+| `PORT` | พอร์ตที่เว็บเซิร์ฟเวอร์ฟัง | `3000` |
+| `SESSION_SECRET` | คีย์เซ็น session token (HMAC) — ถ้าใครรู้ค่านี้ปลอม token เป็นผู้ใช้ใดก็ได้ | สุ่มแล้วเก็บลง `data/session.key` อัตโนมัติ |
+| `FILE_ENCRYPTION_KEY` | คีย์เข้ารหัสไฟล์ KYC/คลังเอกสาร (hex 64 ตัวอักษร หรือข้อความใดก็ได้ที่จะ derive เป็นคีย์) | สุ่มแล้วเก็บลง `data/file.key` อัตโนมัติ |
+| `TAXFLOW_DEV` | ตั้งเป็น `1` เพื่อแนบรหัส OTP กลับมาใน response (`devCode`) ตอนยังไม่ได้ตั้งค่าอีเมลผู้ส่ง — **ห้ามเปิดใน production** เพราะเท่ากับปิด OTP ทั้งระบบ | ปิด (ไม่แนบ devCode) |
+| `PUBLIC_BASE_URL` | โดเมนสาธารณะจริงของระบบ (เช่น `https://taxflow.example.com`) ใช้สร้างลิงก์ QR/ตรวจสอบเอกสาร | ใช้ header `Host` ของ request (เหมาะกับพัฒนาในเครื่องเท่านั้น) |
+| `DATABASE_URL` | connection string ของ PostgreSQL — ใช้เฉพาะเมื่อสลับไปใช้ `lib/store.pg.js` (ดูหัวข้อด้านล่าง) | ไม่ตั้ง = ใช้ SQLite ตามปกติ |
+| `TAXFLOW_DATA_DIR` | เปลี่ยนตำแหน่งโฟลเดอร์ `data/` (ใช้กับ `node:test` เพื่อแยกฐานข้อมูลทดสอบออกจากของจริง) | `<โปรเจกต์>/data` |
+
+**คำแนะนำสำคัญเรื่อง `data/file.key`**: ไฟล์นี้อยู่ในโฟลเดอร์เดียวกับฐานข้อมูลและไฟล์ KYC ที่เข้ารหัสไว้ —
+ถ้าใครคัดลอกโฟลเดอร์ `data/` ทั้งโฟลเดอร์ไป (เช่น backup ไม่ระวัง) ก็จะได้ทั้งไฟล์ที่เข้ารหัสและกุญแจถอดรหัส
+ไปพร้อมกัน เท่ากับการเข้ารหัสไม่มีความหมาย **ก่อนใช้งานจริง ควรตั้งค่า `FILE_ENCRYPTION_KEY` เป็น environment
+variable ที่เก็บแยกจากโฟลเดอร์ข้อมูล** (เช่น ใน secret manager ของผู้ให้บริการ cloud) แทนการปล่อยให้ระบบสร้าง
+ไฟล์คีย์ไว้ข้าง ๆ ฐานข้อมูลแบบค่าเริ่มต้น เช่นเดียวกับ `SESSION_SECRET`
+
+```bash
+SESSION_SECRET="$(openssl rand -hex 32)" \
+FILE_ENCRYPTION_KEY="$(openssl rand -hex 32)" \
+PUBLIC_BASE_URL="https://taxflow.example.com" \
+node server.js
+```
 
 ## ฟีเจอร์หลัก
 
@@ -289,59 +389,200 @@ node server.js
 
 ```
 taxflow/
-├── server.js            เว็บเซิร์ฟเวอร์ + REST API + auth
+├── server.js                 เว็บเซิร์ฟเวอร์ + REST API + auth + seed ข้อมูลตัวอย่าง
+├── package.json               scripts (start/test) — ไม่มี runtime dependency บังคับ
 ├── lib/
-│   ├── auth.js          รหัสผ่าน (scrypt) + session token (HMAC) + cookie
-│   ├── store.js         ชั้นเข้าถึงข้อมูล — ฐานข้อมูล SQLite (node:sqlite)
-│   ├── tax.js           คำนวณภาษี (WHT / VAT / เงินได้บุคคลธรรมดา)
-│   ├── docview.js       สร้างเอกสาร PDF รูปแบบราชการ
-│   └── router.js        router แบบเบา
-├── data/taxflow.db      ฐานข้อมูล SQLite (สร้างอัตโนมัติตอนรันครั้งแรก)
-└── public/              หน้าเว็บ (login, creator, agency)
+│   ├── auth.js                รหัสผ่าน (scrypt) + session token (HMAC, มี tokenVersion) + cookie
+│   ├── store.js                ชั้นเข้าถึงข้อมูล — ฐานข้อมูล SQLite (node:sqlite) [ค่าเริ่มต้น]
+│   ├── store.pg.js             ชั้นเข้าถึงข้อมูล — ฐานข้อมูล PostgreSQL (ทางเลือก, async)
+│   ├── router.js               router แบบเบา + readJsonBody + sendJson/sendHtml
+│   ├── tax.js                  คำนวณภาษี (WHT / VAT / เงินได้บุคคลธรรมดา)
+│   ├── thaiid.js                ตรวจเลขผู้เสียภาษี 13 หลักด้วยสูตร check digit
+│   ├── profile.js               โครงสร้างโปรไฟล์ตามบทบาท + ความครบถ้วน + สิทธิ์ออกเอกสาร
+│   ├── docview.js               สร้างเอกสารรูปแบบราชการเป็น HTML สำหรับพิมพ์/บันทึกเป็น PDF
+│   ├── qr.js                    สร้าง QR Code แบบ pure JS (ไม่มี dependency)
+│   ├── export.js                ส่งออกรายการเอกสารเป็น CSV และ Excel (.xls)
+│   ├── otp.js                    รหัสยืนยันตัวตนแบบครั้งเดียว (OTP)
+│   ├── mailer.js                 ส่งอีเมล OTP จริงผ่าน SMTP ล้วน (node:tls) หรือโหมดพัฒนา
+│   ├── filestore.js              เข้ารหัส/ถอดรหัสไฟล์ด้วย AES-256-GCM
+│   ├── pdpa.js                   ความยินยอม สิทธิเจ้าของข้อมูล และการล้างข้อมูลตามระยะเวลา
+│   ├── ratelimit.js               จำกัดจำนวนครั้งเรียก endpoint ที่เสี่ยงถูกยิงถล่ม
+│   └── magicbytes.js              ตรวจชนิดไฟล์จริงจาก magic bytes ก่อนบันทึกไฟล์อัปโหลด
+├── sql/
+│   └── postgres-schema.sql       โครงสร้างตาราง + ดัชนีสำหรับ PostgreSQL (ทางเลือก)
+├── test/                          ชุดทดสอบ node:test (`npm test`)
+├── data/
+│   ├── taxflow.db                 ฐานข้อมูล SQLite (สร้างอัตโนมัติตอนรันครั้งแรก)
+│   ├── session.key                คีย์เซ็น session (สร้างอัตโนมัติ ถ้าไม่ตั้ง SESSION_SECRET)
+│   ├── file.key                   คีย์เข้ารหัสไฟล์ (สร้างอัตโนมัติ ถ้าไม่ตั้ง FILE_ENCRYPTION_KEY)
+│   ├── mail.config.example.json   ตัวอย่างการตั้งค่าอีเมลผู้ส่ง (คัดลอกเป็น mail.config.json)
+│   └── uploads/                   ไฟล์แนบ/KYC/คลังเอกสาร/โลโก้ (KYC และคลังเอกสารเข้ารหัส)
+└── public/                        หน้าเว็บ
+    ├── login.html, index.html, overview.html, guide.html, laws.html, privacy.html
+    ├── creator.html, agency.html, admin.html, verify.html   หน้าแต่ละบทบาท + หน้าตรวจสอบเอกสารสาธารณะ
+    ├── css/style.css
+    └── js/                        common.js (ใช้ร่วมทุกหน้า) + ไฟล์ตรรกะเฉพาะหน้าอื่น ๆ
 ```
 
 ## REST API (สรุป)
 
 | หมวด | Endpoint |
 |------|----------|
-| Auth | `POST /api/auth/register` · `POST /api/auth/login` · `POST /api/auth/logout` · `GET /api/auth/me` · `PUT /api/auth/profile` |
+| Auth | `POST /api/auth/register` (+`/verify-otp`, `/resend-otp`) · `POST /api/auth/login` (+`/verify-otp`, `/resend-otp`) · `POST /api/auth/logout` · `POST /api/auth/logout-all` · `GET /api/auth/me` · `PUT /api/auth/profile` · `POST/GET/DELETE /api/auth/brand-image/:kind` |
+| OTP | `POST /api/otp/request` · `POST /api/otp/resend` |
 | คำนวณ | `POST /api/wht/calc` · `POST /api/vat/calc` · `POST /api/pit/estimate` |
-| เอกสาร | `POST /api/wht/store` · `POST /api/etax/invoice` · `POST /api/ewht/certificate` · `GET /api/documents` · `GET /api/documents/:id/pdf` · `DELETE /api/documents/:id` |
+| เอกสารภาษี | `POST /api/wht/store` · `POST /api/etax/invoice` · `POST /api/ewht/certificate` · `POST /api/etax/credit-note` · `POST /api/etax/debit-note` · `GET /api/etax/adjustment-reasons` |
+| เอกสารธุรกิจ/สัญญา | `POST /api/docs/create` (ใบเสร็จ/ใบแจ้งหนี้/ใบเสนอราคา/PO/ใบส่งมอบงาน/ใบสำคัญจ่าย/สัญญา/POA) |
+| จัดการเอกสาร | `GET /api/documents` · `GET/PUT/DELETE /api/documents/:id` · `POST /api/documents/:id/status` · `POST /api/documents/:id/duplicate` · `GET /api/documents/:id/versions` · `GET /api/documents/:id/pdf` |
+| ลงนาม/แชร์/ตรวจสอบ | `POST /api/documents/:id/sign` · `POST /api/documents/:id/share` · `GET /api/documents/:id/qr.svg` · `GET /api/verify/:token` |
+| ส่งเอกสารข้ามบัญชี | `POST /api/documents/:id/request` · `GET /api/requests/inbox` · `GET /api/documents/:id/requests` · `GET /api/requests/:id/pdf` · `POST /api/requests/:id/sign` · `POST /api/requests/:id/approve` · `POST /api/requests/:id/decline` · `POST /api/requests/:id/cancel` |
+| คลังลายเซ็น | `GET/POST /api/signatures` · `DELETE /api/signatures/:id` |
+| ไฟล์แนบเอกสาร | `POST /api/documents/:id/attachments` · `GET/DELETE /api/attachments/:id` |
+| คลังเอกสาร (library) | `GET/POST /api/library` · `GET /api/library/:id/file` · `DELETE /api/library/:id` |
+| KYC (ยืนยันตัวตน) | `GET/POST /api/kyc` · `GET /api/kyc/:id/file` · `DELETE /api/kyc/:id` · `POST /api/kyc/submit` |
+| ผู้ดูแลระบบ | `GET /api/admin/users` · `GET /api/admin/users/:id` · `POST /api/admin/users/:id/verify` |
+| PDPA | `PUT /api/pdpa/consent` · `GET /api/pdpa/my-data` · `POST /api/pdpa/delete-account` |
 | คู่ค้า | `GET/POST /api/contacts` · `DELETE /api/contacts/:id` |
-| สรุป | `GET /api/creator/summary` · `GET /api/agency/summary` |
+| แจ้งเตือน | `GET /api/notifications` · `POST /api/notifications/:id/read` · `POST /api/notifications/read-all` |
+| ส่งออก/สรุป | `GET /api/export/csv` · `GET /api/export/xls` · `GET /api/audit` · `GET /api/creator/summary` · `GET /api/agency/summary` |
+| อื่น ๆ | `GET /api/health` · `GET /api/meta/profile-options` |
 
-ทุก endpoint ของเอกสาร/คู่ค้าต้องล็อกอินก่อน และเห็นเฉพาะข้อมูลของบัญชีตนเอง
+ทุก endpoint ของเอกสาร/คู่ค้า/โปรไฟล์ (ยกเว้นที่ระบุว่าเป็นหน้าตรวจสอบสาธารณะ เช่น `/api/verify/:token`)
+ต้องล็อกอินก่อน และเห็นเฉพาะข้อมูลของบัญชีตนเอง
 
-## การต่อฐานข้อมูลจริง (PostgreSQL) ในอนาคต
+## ต่อฐานข้อมูล PostgreSQL
 
-ทุกการเข้าถึงข้อมูลผ่าน `lib/store.js` ไฟล์เดียว เมื่อจะย้ายไป PostgreSQL
-ให้แทนที่ฟังก์ชัน `insert / all / find / findOne / update / remove` ด้วยการ query
-ผ่าน `pg` หรือ Prisma โดยส่วน API และหน้าเว็บไม่ต้องแก้ ตัวอย่าง:
+ค่าเริ่มต้นของระบบใช้ SQLite (`node:sqlite`) ในไฟล์เดียว เหมาะกับพัฒนา/สาธิต/deploy ขนาดเล็ก
+ถ้าต้องการฐานข้อมูล client/server จริงที่ต่อจากหลายเครื่อง สำรองข้อมูลแยกจากไฟล์แอป หรือสเกลได้
+ระบบมี `lib/store.pg.js` เป็นชั้นเข้าถึงข้อมูลสำรับ PostgreSQL ให้พร้อมใช้งาน
 
-```js
-const { Pool } = require('pg');
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+### ขั้นตอนติดตั้ง
 
-async function insert(table, record) {
-  const cols = Object.keys(record);
-  const ph = cols.map((_, i) => `$${i + 1}`).join(',');
-  const { rows } = await pool.query(
-    `INSERT INTO ${table} (${cols.join(',')}) VALUES (${ph}) RETURNING *`,
-    Object.values(record)
-  );
-  return rows[0];
-}
+**1) ติดตั้ง PostgreSQL**
+
+<details>
+<summary>Ubuntu / Debian</summary>
+
+```bash
+sudo apt update
+sudo apt install -y postgresql postgresql-contrib
+sudo service postgresql start   # หรือ: sudo systemctl enable --now postgresql
+```
+</details>
+
+<details>
+<summary>macOS (Homebrew)</summary>
+
+```bash
+brew install postgresql@16
+brew services start postgresql@16
+```
+</details>
+
+<details>
+<summary>Docker (ไม่ต้องติดตั้งอะไรลงเครื่อง)</summary>
+
+```bash
+docker run --name taxflow-postgres -e POSTGRES_USER=taxflow \
+  -e POSTGRES_PASSWORD=changeme -e POSTGRES_DB=taxflow \
+  -p 5432:5432 -d postgres:16
+```
+ข้าม ขั้นตอนที่ 2 ด้านล่างได้เลยถ้าใช้วิธีนี้ (สร้างผู้ใช้/ฐานข้อมูลให้แล้วผ่าน environment variable ข้างต้น)
+</details>
+
+**2) สร้างผู้ใช้และฐานข้อมูล** (ข้ามได้ถ้าใช้ Docker ด้านบน)
+
+```bash
+sudo -u postgres psql -c "CREATE USER taxflow WITH PASSWORD 'changeme';"
+sudo -u postgres psql -c "CREATE DATABASE taxflow OWNER taxflow;"
 ```
 
-Schema ที่แนะนำ: ตาราง `users`, `documents`, `contacts` (ดูฟิลด์ได้จาก record ที่ `store.insert` สร้าง)
+**3) รันสคริปต์สร้างตาราง**
+
+```bash
+psql "postgres://taxflow:changeme@localhost:5432/taxflow" -f sql/postgres-schema.sql
+```
+
+**4) ติดตั้งไดรเวอร์ `pg`** (แพ็กเกจเดียวที่ต้องเพิ่ม — โปรเจกต์นี้ไม่มี dependency บังคับอื่นเลย)
+
+```bash
+npm install pg
+```
+
+**5) ตั้งค่า `DATABASE_URL` แล้วเรียกใช้ `lib/store.pg.js` แทน `lib/store.js`**
+
+```bash
+export DATABASE_URL="postgres://taxflow:changeme@localhost:5432/taxflow"
+```
+
+ทดสอบว่าต่อฐานข้อมูลได้จริงโดยไม่ต้องแก้ `server.js` เลย:
+
+```bash
+node -e "
+(async () => {
+  const store = require('./lib/store.pg.js');
+  await store.ensureReady();
+  console.log('เชื่อมต่อ PostgreSQL สำเร็จ');
+  await store.close();
+})();
+"
+```
+
+### ⚠️ ก่อนสลับ `server.js` มาใช้ `store.pg.js` จริง — ต้องรู้เรื่อง sync vs async
+
+`lib/store.js` (SQLite ผ่าน `node:sqlite`) เป็น **synchronous ล้วน** เรียกแล้วได้ผลลัพธ์ทันที
+โค้ดทั้งระบบ (`server.js` และ `lib/*.js` อื่น ๆ) จึงเรียก `store.insert(...)`, `store.find(...)` ฯลฯ
+แบบไม่ต้อง `await` ทุกจุด ส่วน `lib/store.pg.js` ผ่านไดรเวอร์ `pg` เป็น **asynchronous เสมอ**
+(ทุกฟังก์ชันคืนค่าเป็น Promise) — ฟังก์ชันชื่อและพารามิเตอร์ตรงกับ `store.js` ทุกตัวโดยตั้งใจ
+เพื่อให้สลับใช้งานง่ายที่สุดเท่าที่จะทำได้ แต่ **การสลับไฟล์ require เฉย ๆ ไม่พอ** — ทุกจุดที่เรียก
+`store.xxx(...)` ต้องเปลี่ยนเป็น `await store.xxx(...)` และ handler ที่ยังไม่ใช่ `async` ต้องเติม
+`async` ด้วย เช่น:
+
+```js
+// เดิม (sync, ใช้กับ lib/store.js)
+api.get('/api/health', (req, res) => sendJson(res, 200, { status: 'ok' }));
+const user = store.find('users', id);
+
+// หลังสลับไป lib/store.pg.js (ต้องเป็น async ทั้งเชน)
+api.get('/api/health', async (req, res) => sendJson(res, 200, { status: 'ok' }));
+const user = await store.find('users', id);
+```
+
+Endpoint ส่วนใหญ่ใน `server.js` เป็น `async (req, res) => {...}` อยู่แล้ว (เพราะเรียก
+`await readJsonBody(req)`) จึงแค่เติม `await` หน้าทุกจุดที่เรียก `store.*` เท่านั้น ส่วนจุดที่ยังไม่ใช่
+`async` (เช่น `GET /api/health`, บาง handler ที่ไม่มี body ให้อ่าน) ต้องเติม `async` เข้าไปด้วย
+แนะนำให้ไล่แก้ทีละไฟล์ (`lib/pdpa.js`, `lib/profile.js` ก็เรียก `store.*` เหมือนกัน) แล้วรัน
+`npm test` + ทดสอบผ่านหน้าเว็บจริงให้ครบทุก flow ก่อน deploy จริง — เป็นงาน migration ที่ควรทำแยก
+ต่างหากด้วยความระมัดระวัง ไม่ใช่การสลับไฟล์เดียวแล้วจบ
+
+`lib/store.pg.js` เองผ่านการทดสอบใช้งานจริงแล้ว (`insert`/`find`/`where`/`update`/`remove`/
+`nextDocNumber`/`transaction` ทั้ง commit และ rollback) จึงใช้เป็นฐานสำหรับงาน migration นี้ได้ทันที
+ไฟล์ที่แนบเอกสาร/KYC/คลังเอกสารยังเก็บเป็นไฟล์บนดิสก์เหมือนเดิม (ไม่ได้ย้ายเข้า PostgreSQL) — ย้ายเฉพาะ
+ข้อมูลที่เดิมเก็บในตาราง
 
 ## หมายเหตุ
 
-- ระบบต้นแบบเพื่อการศึกษา ไม่เชื่อมต่อระบบจริงของกรมสรรพากร / ETDA
-- ลายมือชื่อดิจิทัลเป็นการ **จำลอง** — หากต้องการไฟล์ PDF/A-3 + XML จริงตามมาตรฐาน
-  มพศ. 3-2560 ให้เพิ่มการสร้างฝั่งเซิร์ฟเวอร์ด้วย `pdfkit`, `node-signpdf` และ XML builder
-- อัตราภาษี/ค่าลดหย่อนใน `lib/tax.js` ควรปรับตามกฎหมายล่าสุดของกรมสรรพากร
-- ก่อนใช้งานจริง ควรตั้งค่า `SESSION_SECRET` เป็น environment variable
-```bash
-SESSION_SECRET=your-strong-secret node server.js
-```
+- ระบบต้นแบบเพื่อการศึกษา ไม่เชื่อมต่อระบบจริงของกรมสรรพากร / ETDA และไม่ยื่นแบบภาษีให้อัตโนมัติ
+- **"PDF" ที่ระบบสร้างจริง ๆ คือหน้า HTML ที่จัดหน้ากระดาษ A4 แล้วสั่ง `window.print()`
+  ให้ผู้ใช้ "บันทึกเป็น PDF" ผ่านเบราว์เซอร์เอง** ไม่ใช่ไฟล์ PDF ที่เซิร์ฟเวอร์สร้างขึ้นจริง
+  (`GET /api/documents/:id/pdf` คืนค่าเป็น `text/html` ไม่ใช่ `application/pdf`) วิธีนี้ทำให้รองรับ
+  ภาษาไทยได้สมบูรณ์โดยไม่ต้องฝังฟอนต์เอง เหมาะกับระบบต้นแบบ แต่ **ไม่ได้เป็นไฟล์ PDF/A-3 + XML ตามมาตรฐาน
+  มพศ. 3-2560 ของ ETDA** หากต้องการไฟล์ตามมาตรฐานจริง ต้องเพิ่มการสร้างฝั่งเซิร์ฟเวอร์ด้วยไลบรารีอย่าง
+  `pdfkit`/`node-signpdf` และ XML builder ต่างหาก
+- ลายมือชื่อดิจิทัลเป็นการ **จำลอง** (บันทึกชื่อผู้ลงนาม เวลา และรูปลายเซ็น ไม่ใช่ลายเซ็นอิเล็กทรอนิกส์
+  ตามมาตรฐาน PAdES/XAdES จริงที่ผูกกับ certificate)
+- อัตราภาษี/ค่าลดหย่อนใน `lib/tax.js` ควรปรับตามกฎหมายล่าสุดของกรมสรรพากรก่อนใช้งานจริง โดยเฉพาะอัตรา
+  หักค่าใช้จ่ายเหมาของเงินได้มาตรา 40(8) ที่มีหลายอัตราตามประเภทธุรกิจย่อย ระบบใช้ค่าเหมาอย่างง่าย (60%)
+  สำหรับกรณีทั่วไปเท่านั้น
+- ก่อนใช้งานจริง ให้ตั้งค่า `SESSION_SECRET`, `FILE_ENCRYPTION_KEY`, `PUBLIC_BASE_URL` เป็น environment
+  variable ที่เก็บแยกจากไฟล์ในโปรเจกต์เสมอ (ดูหัวข้อ [ตัวแปรแวดล้อม](#ตัวแปรแวดล้อม) ด้านบน) และตั้งค่า
+  `data/mail.config.json` ให้ส่งอีเมล OTP จริง — ห้ามปล่อยให้ `TAXFLOW_DEV=1` ติดไปกับ production
+
+### สิ่งที่ยังไม่ได้ทำ (ข้อเสนอแนะการพัฒนาต่อ — เพิ่มเติมจาก ver14)
+
+* Migration ทั้งระบบ (`server.js` + `lib/*.js`) จาก synchronous เป็น asynchronous เพื่อให้สลับไปใช้
+  `lib/store.pg.js` ได้แบบสมบูรณ์ (ดูคำอธิบายในหัวข้อ PostgreSQL ด้านบน)
+* ไฟล์แนบ/KYC/คลังเอกสารยังเก็บบนดิสก์เครื่องเดียว — ถ้า deploy หลายอินสแตนซ์ควรย้ายไป object storage
+  ร่วม (เช่น S3-compatible) แทน
+* OTP ทาง SMS สำหรับธุรกรรมที่ควรแยกช่องทางจากอีเมล (ยังคงเหตุผลเดิมจาก ver14)
+* สร้างไฟล์ PDF/A-3 + XML จริงตามมาตรฐาน มพศ. 3-2560 ของ ETDA แทนหน้า HTML สั่งพิมพ์

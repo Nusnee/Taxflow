@@ -20,6 +20,11 @@ function baht(n) {
   return (Number(n) || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// escape ข้อความก่อนแทรกลง innerHTML — ใช้กับข้อมูลทุกอย่างที่มาจากผู้ใช้/คู่ค้า (กัน stored XSS)
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 function toast(msg, kind = 'ok') {
   let el = document.querySelector('.toast');
   if (!el) { el = document.createElement('div'); el.className = 'toast'; document.body.appendChild(el); }
@@ -90,6 +95,7 @@ const DOC_LABEL = {
   RECEIPT: 'ใบเสร็จรับเงิน', INVOICE: 'ใบแจ้งหนี้', QUOTATION: 'ใบเสนอราคา',
   PO: 'ใบสั่งซื้อ (PO)', DELIVERY: 'ใบส่งมอบงาน', PAYMENT: 'ใบสำคัญจ่าย',
   CONTRACT_INF: 'สัญญาจ้าง Influencer', CONTRACT_BRAND: 'สัญญากับแบรนด์', POA: 'หนังสือมอบอำนาจ',
+  CREDIT_NOTE: 'ใบลดหนี้', DEBIT_NOTE: 'ใบเพิ่มหนี้',
 };
 const STATUS_LABEL = { issued: 'ออกแล้ว', stored: 'จัดเก็บแล้ว' };
 function badge(type) {

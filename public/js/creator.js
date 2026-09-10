@@ -65,7 +65,7 @@ async function loadOverview() {
   const body = document.getElementById('ov-body');
   body.innerHTML = items.slice(0, 5).map((d) => `
     <tr class="row-click" onclick="openDoc(${d.id})">
-      <td class="docno">${d.docNo}</td><td>${d.payer || '-'}</td>
+      <td class="docno">${d.docNo || 'แบบร่าง'}</td><td>${d.payer || '-'}</td>
       <td class="num">${baht(d.base)}</td><td class="num" style="color:var(--orange-deep)">${baht(d.wht)}</td>
       <td class="num">${baht(d.net)}</td>
       <td class="actions" onclick="event.stopPropagation()"><a class="btn btn-ghost btn-sm" href="/api/documents/${d.id}/pdf" target="_blank">PDF</a></td>
@@ -87,7 +87,7 @@ async function loadDocs() {
     const total = isWhtT ? d.net : (d.total ?? d.base);
     return `
     <tr class="row-click" onclick="openDoc(${d.id})">
-      <td class="docno">${d.docNo}</td><td>${badge(d.type)}</td><td>${cp}</td>
+      <td class="docno">${d.docNo || 'แบบร่าง'}</td><td>${badge(d.type)}</td><td>${cp}</td>
       <td class="num">${baht(d.base)}</td>
       <td class="num">${baht(total)}</td>
       <td>${statusChip(d.status)}${d.sentTo && d.status === 'pending' ? `<div class="sent-to">ส่งถึง ${d.sentTo.name}</div>` : ''}</td>
@@ -103,21 +103,30 @@ async function loadDocs() {
 async function fillFromDocs() {
   const s = await api.get('/api/creator/summary');
   document.getElementById('p-gross').value = s.grossIncome;
-  toast('ดึงยอดรวม ฿' + baht(s.grossIncome) + ' แล้ว');
+  document.getElementById('p-wht').value = s.withholdingPaid;
+  toast('ดึงยอดรวม ฿' + baht(s.grossIncome) + ' และภาษีที่ถูกหักไว้ ฿' + baht(s.withholdingPaid) + ' แล้ว');
 }
 async function estimatePit() {
   const gross = Number(document.getElementById('p-gross').value);
   if (!gross) return toast('กรุณากรอกรายได้', 'err');
-  const { data: r } = await api.post('/api/pit/estimate', { grossIncome: gross });
+  const incomeType = document.getElementById('p-income-type').value;
+  const withholdingPaid = Number(document.getElementById('p-wht').value) || 0;
+  const { data: r } = await api.post('/api/pit/estimate', { grossIncome: gross, incomeType, withholdingPaid });
   const steps = r.steps.map((st) => `<div class="line"><span>${st.range} (${st.rate}%)</span><b>฿${baht(st.tax)}</b></div>`).join('');
+  const balanceLine = withholdingPaid
+    ? `<div class="line ${r.balance > 0 ? '' : 'total'}"><span>${r.balance > 0 ? 'ต้องชำระเพิ่มโดยประมาณ' : 'ได้รับคืนภาษีโดยประมาณ'}</span><b style="color:${r.balance > 0 ? 'var(--orange-deep)' : 'var(--ok, #1E8E5A)'}">฿${baht(Math.abs(r.balance))}</b></div>`
+    : '';
   document.getElementById('p-result').innerHTML = `
+    <div class="line"><span>ประเภทเงินได้</span><b>มาตรา ${r.incomeType}</b></div>
     <div class="line"><span>รายได้รวม</span><b>฿${baht(r.grossIncome)}</b></div>
-    <div class="line"><span>หักค่าใช้จ่าย</span><b>-฿${baht(r.expense)}</b></div>
+    <div class="line"><span>หักค่าใช้จ่าย (${r.expenseRate}%)</span><b>-฿${baht(r.expense)}</b></div>
     <div class="line"><span>หักลดหย่อนส่วนตัว</span><b>-฿${baht(r.personalAllowance)}</b></div>
     <div class="line"><span>เงินได้สุทธิ</span><b>฿${baht(r.netIncome)}</b></div>
     ${steps ? '<div style="height:8px"></div>' + steps : ''}
-    <div class="line total"><span>ภาษีที่ต้องชำระโดยประมาณ</span><b>฿${baht(r.totalTax)}</b></div>
-    <div class="line"><span>อัตราภาษีเฉลี่ย</span><b>${r.effectiveRate}%</b></div>`;
+    <div class="line total"><span>ภาษีที่ต้องชำระทั้งปีโดยประมาณ</span><b>฿${baht(r.totalTax)}</b></div>
+    <div class="line"><span>อัตราภาษีเฉลี่ย</span><b>${r.effectiveRate}%</b></div>
+    ${withholdingPaid ? `<div class="line"><span>หักภาษีที่ถูกหัก ณ ที่จ่ายไว้แล้ว</span><b>-฿${baht(withholdingPaid)}</b></div>` : ''}
+    ${balanceLine}`;
 }
 
 function emptyRow(cols) { return emptyStateRow(cols); }

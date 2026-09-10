@@ -21,6 +21,8 @@ const pdpa = require('./lib/pdpa');
 const thaiid = require('./lib/thaiid');
 const filestore = require('./lib/filestore');
 const { createRouter, readJsonBody, sendJson, sendHtml } = require('./lib/router');
+const ratelimit = require('./lib/ratelimit');
+const magicbytes = require('./lib/magicbytes');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -116,8 +118,25 @@ function maskEmail(email) {
 }
 function currentUser(req) {
   const payload = auth.verifyToken(auth.parseCookies(req).tf_session);
-  return payload ? store.find('users', payload.uid) : null;
+  if (!payload) return null;
+  const user = store.find('users', payload.uid);
+  if (!user) return null;
+  // เพิกถอน session ได้ทันที: ถ้า tokenVersion ใน token ไม่ตรงกับปัจจุบัน (logout-all/ลบบัญชี)
+  // หรือบัญชีถูกลบไปแล้ว ให้ถือว่า token นี้ใช้ไม่ได้อีกต่อไป แม้ยังไม่หมดอายุตามเวลาก็ตาม
+  if ((payload.tv || 0) !== (user.tokenVersion || 0)) return null;
+  if (user.deleted) return null;
+  return user;
 }
+// จำกัดจำนวนครั้งของ endpoint ที่เสี่ยงถูกยิงถล่ม (login/register/otp) — คืน true แล้วตอบ 429 ถ้าเกินโควตา
+function rateLimited(res, key, limit, windowMs, message) {
+  const r = ratelimit.hit(key, limit, windowMs);
+  if (!r.allowed) {
+    sendJson(res, 429, { error: message || `ทำรายการถี่เกินไป กรุณารออีกประมาณ ${r.retryAfterSec} วินาทีแล้วลองใหม่` });
+    return true;
+  }
+  return false;
+}
+
 function requireAuth(handler) {
   return (req, res) => {
     const user = currentUser(req);
@@ -129,11 +148,63 @@ function requireAuth(handler) {
 
 /* ---------- helpers: numbering, validation, audit, versions, notify ---------- */
 const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
-const PREFIX = { ETAX: 'TAX', EWHT: 'WHT', WHT: 'WHT', RECEIPT: 'RCP', INVOICE: 'INV', QUOTATION: 'QTN', PO: 'PO', DELIVERY: 'DLV', PAYMENT: 'PAY', CONTRACT_INF: 'CTR', CONTRACT_BRAND: 'CTB', POA: 'POA' };
+// ข้อ: createdAt เป็นเวลา UTC เสมอ เอกสารที่สร้างช่วง 00:00–07:00 น. ตามเวลาไทย (Asia/Bangkok, UTC+7)
+// จะถูกแสดง/กรองผิดเป็นวันก่อนหน้า จึงต้องคำนวณ "วันที่ออกเอกสาร" ตามเขตเวลาไทยแยกไว้ต่างหาก
+const BKK_DATE_FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' });
+function bangkokDateStr(d = new Date()) { return BKK_DATE_FMT.format(d); } // คืนค่า YYYY-MM-DD ตามเวลาไทย
+// รูปลายเซ็นต้องเป็น data URI รูปภาพที่แน่นอนเท่านั้น (กัน XSS ผ่าน src="...")
+const SIGNATURE_IMAGE_RE = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$/;
+function isValidSignatureImage(v) {
+  return typeof v === 'string' && v.length > 0 && v.length <= 700 * 1024 && SIGNATURE_IMAGE_RE.test(v);
+}
+
+// ข้อ 6: แฮชเนื้อหาเอกสาร ณ ตอนลงนาม — ใช้ตรวจว่าเนื้อหาเอกสารถูกแก้ไขหลังลงนามหรือไม่
+// (ตัดฟิลด์ที่ไม่ใช่ "เนื้อหา" ออก เช่น สถานะ ลายเซ็น เวลาบันทึก เพื่อให้แฮชเปลี่ยนเฉพาะเมื่อเนื้อหาจริงเปลี่ยน)
+const CONTENT_HASH_EXCLUDE = new Set([
+  'id', 'userId', 'createdAt', 'updatedAt', 'status', 'statusNote',
+  'signed', 'signature', 'counterpartySignature', 'cancelledAt', 'cancelReason', 'docNo',
+]);
+function contentHash(doc) {
+  const obj = {};
+  for (const k of Object.keys(doc).sort()) {
+    if (CONTENT_HASH_EXCLUDE.has(k)) continue;
+    obj[k] = doc[k];
+  }
+  return crypto.createHash('sha256').update(JSON.stringify(obj)).digest('hex');
+}
+const PREFIX = { ETAX: 'TAX', EWHT: 'WHT', WHT: 'WHT', RECEIPT: 'RCP', INVOICE: 'INV', QUOTATION: 'QTN', PO: 'PO', DELIVERY: 'DLV', PAYMENT: 'PAY', CONTRACT_INF: 'CTR', CONTRACT_BRAND: 'CTB', POA: 'POA', CREDIT_NOTE: 'CN', DEBIT_NOTE: 'DN' };
 
 function makeDocNo(type, userId) {
-  const seq = store.nextDocNumber(userId, type);
-  return `${PREFIX[type] || 'DOC'}-${new Date().getFullYear()}-${String(seq).padStart(5, '0')}`;
+  const prefix = PREFIX[type] || 'DOC';
+  const year = new Date().getFullYear();
+  const seq = store.nextDocNumber(userId, prefix, year);
+  return `${prefix}-${year}-${String(seq).padStart(5, '0')}`;
+}
+
+// ข้อ 8: ล็อกอัตราภาษีไว้ที่ชุดค่าที่กฎหมายกำหนด ไม่รับอัตราจากผู้ใช้โดยตรง
+const VAT_RATE_FIXED = 7;
+const WHT_RATES = [1, 2, 3, 5, 10, 15];
+function validWhtRate(rate, fallback = 3) {
+  const r = Number(rate);
+  return WHT_RATES.includes(r) ? r : fallback;
+}
+// ข้อ 8 / สเปกข้อ 9, 24: เลขผู้เสียภาษีของคู่ค้า ถ้ากรอกมาต้องผ่าน check digit (ไม่บังคับกรอก แต่กรอกแล้วต้องถูก)
+function taxIdError(value, label) {
+  const digits = thaiid.digitsOnly(value);
+  if (!digits) return null;
+  if (!thaiid.isValidTaxId(digits)) return `เลขประจำตัวผู้เสียภาษี${label ? 'ของ' + label : ''}ไม่ถูกต้อง กรุณาตรวจสอบเลข 13 หลักอีกครั้ง`;
+  return null;
+}
+// ข้อ 8: จำนวน (qty) ต้องมากกว่า 0 และราคาต่อหน่วยห้ามติดลบ กันเอกสารยอดติดลบ/ผิดธรรมชาติ
+function validLineItems(items) {
+  return Array.isArray(items) ? items.filter((i) => i && (i.name || i.price)) : [];
+}
+function lineItemErrors(items) {
+  const errs = [];
+  if (items.some((i) => !i.name)) errs.push('มีรายการที่ไม่ได้ระบุชื่อ');
+  if (items.some((i) => !(Number(i.qty) > 0))) errs.push('จำนวนของแต่ละรายการต้องมากกว่า 0');
+  if (items.some((i) => !(Number(i.price) >= 0))) errs.push('ราคาต่อหน่วยของแต่ละรายการต้องไม่ติดลบ');
+  return errs;
 }
 
 // ตรวจสอบความครบถ้วนของข้อมูลเอกสาร
@@ -141,13 +212,18 @@ function validateDocument(type, body) {
   const errors = [];
   if (type === 'ETAX') {
     if (!body.buyer) errors.push('กรุณาระบุชื่อผู้ซื้อ/ผู้ว่าจ้าง');
-    const items = Array.isArray(body.items) ? body.items.filter((i) => i.name || i.price) : [];
+    const buyerTaxIdErr = taxIdError(body.buyerTaxId, 'ผู้ซื้อ');
+    if (buyerTaxIdErr) errors.push(buyerTaxIdErr);
+    const items = validLineItems(body.items);
     if (!items.length) errors.push('กรุณาเพิ่มรายการอย่างน้อย 1 รายการ');
-    if (items.some((i) => !i.name)) errors.push('มีรายการที่ไม่ได้ระบุชื่อ');
-    if (items.some((i) => !(Number(i.price) > 0))) errors.push('มีรายการที่ราคาไม่ถูกต้อง');
+    errors.push(...lineItemErrors(items));
   } else {
     if (!body.amount || !(Number(body.amount) > 0)) errors.push('กรุณาระบุยอดเงินให้ถูกต้อง');
-    if (type === 'EWHT' && !body.payee) errors.push('กรุณาระบุชื่อผู้รับเงิน');
+    if (type === 'EWHT') {
+      if (!body.payee) errors.push('กรุณาระบุชื่อผู้รับเงิน');
+      const payeeTaxIdErr = taxIdError(body.payeeTaxId, 'ผู้รับเงิน');
+      if (payeeTaxIdErr) errors.push(payeeTaxIdErr);
+    }
     if (type === 'WHT' && !body.payer) errors.push('กรุณาระบุชื่อผู้จ่ายเงิน');
   }
   return { ok: errors.length === 0, errors };
@@ -202,13 +278,15 @@ function requireAdmin(handler) {
  *  บัญชีจะยังใช้งานไม่ได้จนกว่าจะยืนยันรหัส OTP ที่ส่งไปทางอีเมล
  * ========================================================= */
 api.post('/api/auth/register', async (req, res) => {
+  // ข้อ: ไม่มี rate limit ที่ register — จำกัดจำนวนบัญชีที่สมัครได้ต่อ IP ต่อชั่วโมง
+  if (rateLimited(res, `register:${ratelimit.clientIp(req)}`, 8, 60 * 60 * 1000, 'สมัครสมาชิกถี่เกินไปจากเครือข่ายนี้ กรุณาลองใหม่ภายหลัง')) return;
   const b = await readJsonBody(req);
   const email = String(b.email || '').trim().toLowerCase();
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return sendJson(res, 400, { error: 'รูปแบบอีเมลไม่ถูกต้อง' });
   if (!b.password) return sendJson(res, 400, { error: 'กรุณากรอกรหัสผ่าน' });
   if (String(b.password).length < 8) return sendJson(res, 400, { error: 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร' });
-  if (store.findOne('users', (u) => u.email === email)) return sendJson(res, 409, { error: 'อีเมลนี้ถูกใช้แล้ว' });
+  if (store.whereOne('users', { email })) return sendJson(res, 409, { error: 'อีเมลนี้ถูกใช้แล้ว' });
 
   // ห้ามสมัครเป็นผู้ดูแลระบบผ่านหน้าลงทะเบียน
   const role = ['agency', 'corporate', 'creator'].includes(b.role) ? b.role : 'creator';
@@ -259,7 +337,7 @@ api.post('/api/auth/register/verify-otp', async (req, res) => {
   const user = store.find('users', result.otp.userId);
   if (!user) return sendJson(res, 404, { error: 'ไม่พบบัญชีผู้ใช้' });
   const updated = store.update('users', user.id, { emailVerified: true, emailVerifiedAt: new Date().toISOString() });
-  auth.setSessionCookie(res, auth.createToken({ uid: user.id, role: user.role }));
+  auth.setSessionCookie(res, auth.createToken({ uid: user.id, role: user.role, tv: user.tokenVersion || 0 }));
   logAudit(user.id, null, 'verify-email', 'ยืนยันอีเมลสำเร็จ บัญชีพร้อมใช้งาน', user.displayName);
   sendJson(res, 200, { user: publicUser(updated) });
 });
@@ -270,6 +348,7 @@ api.post('/api/auth/register/resend-otp', async (req, res) => {
   if (!row || row.purpose !== 'register') return sendJson(res, 404, { error: 'ไม่พบรายการยืนยันอีเมลนี้ กรุณาสมัครใหม่อีกครั้ง' });
   const r = otp.regenerate(b.otpId);
   if (!r) return sendJson(res, 400, { error: 'ไม่สามารถขอรหัสใหม่ได้ กรุณาสมัครใหม่อีกครั้ง' });
+  if (r.exhausted) return sendJson(res, 429, { error: 'ขอรหัสใหม่ครบจำนวนครั้งที่กำหนดแล้ว กรุณาสมัครใหม่อีกครั้ง' });
   if (r.throttled) return sendJson(res, 429, { error: `กรุณารออีก ${r.waitSec} วินาทีก่อนขอรหัสใหม่` });
   const user = store.find('users', row.userId);
   const mailResult = await mailer.sendOtpEmail(user.email, { code: r.code, purpose: 'register', displayName: user.displayName });
@@ -280,7 +359,10 @@ api.post('/api/auth/register/resend-otp', async (req, res) => {
 api.post('/api/auth/login', async (req, res) => {
   const b = await readJsonBody(req);
   const email = String(b.email || '').trim().toLowerCase();
-  const user = store.findOne('users', (u) => u.email === email);
+  // ข้อ: ไม่มี rate limit ที่ login — จำกัดทั้งต่อ IP (กัน brute-force กว้างๆ) และต่อ IP+อีเมล (กัน targeted)
+  if (rateLimited(res, `login:ip:${ratelimit.clientIp(req)}`, 30, 10 * 60 * 1000)) return;
+  if (email && rateLimited(res, `login:acct:${ratelimit.clientIp(req)}:${email}`, 8, 10 * 60 * 1000, 'ลองเข้าสู่ระบบผิดถี่เกินไป กรุณารอสักครู่แล้วลองใหม่')) return;
+  const user = store.whereOne('users', { email });
   if (!user || !auth.verifyPassword(b.password, user.passwordHash)) return sendJson(res, 401, { error: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' });
 
   // บัญชีที่ยังไม่ได้ยืนยันอีเมล ให้กลับไปทำขั้นตอนยืนยันอีเมลให้เสร็จก่อน
@@ -310,7 +392,7 @@ api.post('/api/auth/login/verify-otp', async (req, res) => {
   if (!result.ok) return sendJson(res, 400, { error: result.error });
   const user = store.find('users', result.otp.userId);
   if (!user) return sendJson(res, 404, { error: 'ไม่พบบัญชีผู้ใช้' });
-  auth.setSessionCookie(res, auth.createToken({ uid: user.id, role: user.role }));
+  auth.setSessionCookie(res, auth.createToken({ uid: user.id, role: user.role, tv: user.tokenVersion || 0 }));
   logAudit(user.id, null, 'login', 'เข้าสู่ระบบสำเร็จ (ยืนยันด้วย OTP)', user.displayName);
   sendJson(res, 200, { user: publicUser(user) });
 });
@@ -322,6 +404,7 @@ api.post('/api/auth/login/resend-otp', async (req, res) => {
   if (!row || row.purpose !== 'login') return sendJson(res, 404, { error: 'ไม่พบรายการ OTP นี้ กรุณาเข้าสู่ระบบใหม่อีกครั้ง' });
   const r = otp.regenerate(b.otpId);
   if (!r) return sendJson(res, 400, { error: 'ไม่สามารถขอรหัสใหม่ได้ กรุณาเข้าสู่ระบบใหม่อีกครั้ง' });
+  if (r.exhausted) return sendJson(res, 429, { error: 'ขอรหัสใหม่ครบจำนวนครั้งที่กำหนดแล้ว กรุณาเข้าสู่ระบบใหม่อีกครั้ง' });
   if (r.throttled) return sendJson(res, 429, { error: `กรุณารออีก ${r.waitSec} วินาทีก่อนขอรหัสใหม่` });
   const user = store.find('users', row.userId);
   const mailResult = await mailer.sendOtpEmail(user.email, { code: r.code, purpose: 'login', displayName: user.displayName });
@@ -329,6 +412,13 @@ api.post('/api/auth/login/resend-otp', async (req, res) => {
 });
 
 api.post('/api/auth/logout', (req, res) => { auth.clearSessionCookie(res); sendJson(res, 200, { ok: true }); });
+// ออกจากระบบทุกอุปกรณ์ — เพิ่ม tokenVersion เพื่อเพิกถอน session เดิมทั้งหมดทันที (ไม่ใช่แค่ลบ cookie ฝั่งนี้)
+api.post('/api/auth/logout-all', requireAuth((req, res) => {
+  store.update('users', req.user.id, { tokenVersion: (req.user.tokenVersion || 0) + 1 });
+  auth.clearSessionCookie(res);
+  logAudit(req.user.id, null, 'logout-all', 'ออกจากระบบทุกอุปกรณ์ (เพิกถอน session เดิมทั้งหมด)', req.user.displayName);
+  sendJson(res, 200, { ok: true });
+}));
 api.get('/api/auth/me', (req, res) => {
   const user = currentUser(req);
   if (!user) return sendJson(res, 401, { error: 'ยังไม่ได้เข้าสู่ระบบ' });
@@ -371,6 +461,14 @@ api.put('/api/auth/profile', requireAuth(async (req, res) => {
     return sendJson(res, 409, { error: 'เลขประจำตัวผู้เสียภาษีนี้ถูกใช้โดยบัญชีอื่นแล้ว' });
   }
 
+  // ข้อ: การเปลี่ยนเลขบัญชีธนาคารรับเงินเป็นช่องทางหลักของการโกงเปลี่ยนบัญชีรับเงิน
+  // ต้องยืนยันด้วย OTP ก่อนบันทึกทุกครั้ง (เดิมแก้ได้ทันทีเหมือนข้อมูลอื่นๆ ในโปรไฟล์)
+  const bankChanged = patch.bank && JSON.stringify(patch.bank) !== JSON.stringify(req.user.bank || {});
+  if (bankChanged) {
+    const check = otp.verify(b.otpId, b.code, { userId: req.user.id, purpose: 'change-bank' });
+    if (!check.ok) return sendJson(res, 400, { error: 'เปลี่ยนบัญชีธนาคารต้องยืนยันด้วยรหัส OTP ก่อน: ' + check.error, requireOtp: true });
+  }
+
   // ถ้าแก้ข้อมูลสำคัญหลังผ่านการตรวจสอบแล้ว ต้องกลับไปรอตรวจสอบใหม่
   const critical = ['taxId', 'companyName', 'displayName', 'entityType', 'vatRegistered'];
   const changedCritical = critical.some((k) => JSON.stringify(patch[k]) !== undefined && patch[k] !== undefined && JSON.stringify(patch[k]) !== JSON.stringify(req.user[k]));
@@ -381,7 +479,7 @@ api.put('/api/auth/profile', requireAuth(async (req, res) => {
   }
 
   const u = store.update('users', req.user.id, { ...patch, ...extra });
-  logAudit(req.user.id, null, 'profile-update', 'แก้ไขข้อมูลโปรไฟล์', req.user.displayName);
+  logAudit(req.user.id, null, 'profile-update', bankChanged ? 'แก้ไขข้อมูลโปรไฟล์ (รวมถึงเปลี่ยนบัญชีธนาคาร — ยืนยันด้วย OTP แล้ว)' : 'แก้ไขข้อมูลโปรไฟล์', req.user.displayName);
   sendJson(res, 200, { user: publicUser(u), profile: profileMeta(u) });
 }));
 
@@ -393,6 +491,7 @@ api.post('/api/auth/brand-image', requireAuth(async (req, res) => {
   if (!IMG_MIME[b.mime]) return sendJson(res, 415, { error: 'รองรับเฉพาะไฟล์ PNG, JPG, WEBP เท่านั้น' });
   const buf = Buffer.from(b.dataBase64, 'base64');
   if (buf.length > IMG_MAX) return sendJson(res, 413, { error: 'ไฟล์รูปภาพต้องมีขนาดไม่เกิน 1 MB' });
+  if (!magicbytes.matches(buf, b.mime)) return sendJson(res, 415, { error: 'ไฟล์ไม่ตรงกับชนิดที่แจ้ง กรุณาอัปโหลดไฟล์รูปภาพจริง' });
 
   const field = kind === 'seal' ? 'sealFile' : 'logoFile';
   const old = req.user[field];
@@ -456,6 +555,7 @@ api.post('/api/kyc', requireAuth(async (req, res) => {
   const buf = Buffer.from(b.dataBase64, 'base64');
   if (!buf.length) return sendJson(res, 400, { error: 'ไฟล์เสียหายหรือว่างเปล่า' });
   if (buf.length > KYC_MAX) return sendJson(res, 413, { error: 'ไฟล์มีขนาดเกิน 5 MB' });
+  if (!magicbytes.matches(buf, b.mime)) return sendJson(res, 415, { error: 'ไฟล์ไม่ตรงกับชนิดที่แจ้ง กรุณาอัปโหลดไฟล์จริง' });
 
   // อัปโหลดซ้ำประเภทเดิม = แทนที่ของเดิม
   const old = store.findOne('kyc_documents', (k) => k.userId === req.user.id && k.docType === b.docType);
@@ -552,6 +652,11 @@ api.post('/api/admin/users/:id/verify', requireAdmin(async (req, res) => {
   const b = await readJsonBody(req);
   const u = store.find('users', req.params.id);
   if (!u || u.role === 'admin') return sendJson(res, 404, { error: 'ไม่พบผู้ใช้' });
+  // ข้อ: อนุมัติ/ไม่อนุมัติได้เฉพาะบัญชีที่ "ส่งเอกสารขอตรวจสอบแล้ว" (verifyStatus=pending) เท่านั้น
+  // กันแอดมินกดอนุมัติบัญชีที่ยังไม่ได้ submit เอกสารเลย
+  if (u.verifyStatus !== 'pending') {
+    return sendJson(res, 400, { error: 'ผู้ใช้รายนี้ยังไม่ได้ส่งเอกสารขอตรวจสอบตัวตน จึงยังพิจารณาผลไม่ได้' });
+  }
   const approve = !!b.approve;
   const note = String(b.note || '').slice(0, 500);
   if (!approve && !note) return sendJson(res, 400, { error: 'กรุณาระบุเหตุผลที่ไม่อนุมัติ เพื่อให้ผู้ใช้แก้ไขได้ถูกต้อง' });
@@ -561,6 +666,10 @@ api.post('/api/admin/users/:id/verify', requireAdmin(async (req, res) => {
     verifiedAt: approve ? new Date().toISOString() : null,
     verifiedBy: req.user.displayName,
   });
+  // ข้อ: สถานะรายเอกสารใน kyc_documents ค้างเป็น pending ตลอด ไม่เคยอัปเดตตามผลตรวจของแอดมิน
+  for (const doc of store.all('kyc_documents', (k) => k.userId === u.id)) {
+    store.update('kyc_documents', doc.id, { status: approve ? 'approved' : 'rejected', reviewedAt: new Date().toISOString(), reviewedBy: req.user.displayName });
+  }
   logAudit(u.id, null, approve ? 'kyc-approve' : 'kyc-reject',
     approve ? 'ผู้ดูแลระบบอนุมัติการยืนยันตัวตน' : `ผู้ดูแลระบบไม่อนุมัติ: ${note}`, req.user.displayName);
   notify(u.id, 'kyc', approve
@@ -611,11 +720,25 @@ api.post('/api/pdpa/delete-account', requireAuth(async (req, res) => {
     return sendJson(res, 400, { error: 'กรุณาพิมพ์ข้อความยืนยัน "ลบบัญชีของฉัน" ให้ถูกต้อง' });
   }
   const uid = req.user.id;
+  const oldEmail = req.user.email;
+  const oldName = req.user.displayName;
+  const ANON_LABEL = 'ผู้ใช้ที่ลบบัญชีแล้ว';
 
+  // ข้อ: การลบบัญชีแก้หลายตารางพร้อมกัน ถ้าล้มเหลวกลางทางไม่ควรเหลือข้อมูลค้างครึ่งๆ กลางๆ — ครอบด้วย transaction
+  store.transaction(() => {
   // ลบไฟล์ทั้งหมดที่เป็นข้อมูลส่วนบุคคล
   for (const k of store.all('kyc_documents', (x) => x.userId === uid)) {
     filestore.removeFile(store.UPLOAD_DIR, k.storedName);
     store.remove('kyc_documents', k.id);
+  }
+  // ข้อ PDPA: การลบบัญชีเดิมตกหล่นคลังเอกสาร (library) และไฟล์แนบเอกสาร (attachments) — ต้องลบทั้งไฟล์และแถวด้วย
+  for (const l of store.all('library', (x) => x.userId === uid)) {
+    filestore.removeFile(store.UPLOAD_DIR, l.storedName);
+    store.remove('library', l.id);
+  }
+  for (const a of store.all('attachments', (x) => x.userId === uid)) {
+    try { fs.unlinkSync(path.join(store.UPLOAD_DIR, a.storedName)); } catch {}
+    store.remove('attachments', a.id);
   }
   for (const f of ['logoFile', 'sealFile']) {
     if (req.user[f] && req.user[f].storedName) filestore.removeFile(store.UPLOAD_DIR, req.user[f].storedName);
@@ -624,17 +747,37 @@ api.post('/api/pdpa/delete-account', requireAuth(async (req, res) => {
     for (const row of store.all(t, (x) => x.userId === uid)) store.remove(t, row.id);
   }
 
+  // ข้อ PDPA: doc_versions เป็น snapshot ของเอกสารภาษีที่ต้องเก็บไว้ตามกฎหมาย (5 ปี) จึงไม่ลบ
+  // แต่ชื่อผู้แก้ไข (editor) ที่ฝังไว้ตรงๆ ต้องล้างไม่ให้ระบุตัวตนเจ้าของบัญชีที่ลบไปแล้ว
+  const ownDocIds = new Set(store.all('documents', (x) => x.userId === uid).map((d) => d.id));
+  for (const v of store.all('doc_versions', (x) => ownDocIds.has(x.docId) && x.editor === oldName)) {
+    store.update('doc_versions', v.id, { editor: ANON_LABEL });
+  }
+  // audit_log ก็เก็บไว้เป็นร่องรอยตรวจสอบตามกฎหมาย แต่ต้องล้างชื่อ/อีเมลที่ระบุตัวตนออก
+  // (เช่น ข้อความ "ส่งรหัส OTP ไปที่ xxx@example.com" ที่ฝังอีเมลไว้ตรงๆ ในข้อความ)
+  for (const a of store.all('audit_log')) {
+    const isOwn = a.userId === uid && a.actor === oldName;
+    const mentionsEmail = oldEmail && a.detail && a.detail.includes(oldEmail);
+    if (!isOwn && !mentionsEmail) continue;
+    store.update('audit_log', a.id, {
+      actor: isOwn ? ANON_LABEL : a.actor,
+      detail: mentionsEmail ? a.detail.split(oldEmail).join('[อีเมลบัญชีที่ถูกลบ]') : a.detail,
+    });
+  }
+
   // ทำให้บัญชีไม่ระบุตัวตน แทนการลบทิ้งทั้งหมด เพราะเอกสารภาษีต้องเก็บ 5 ปี
   const anon = {
     ...profile.defaults(req.user.role),
     email: `deleted-${uid}@removed.local`,
     passwordHash: auth.hashPassword(crypto.randomBytes(24).toString('hex')),
-    displayName: 'ผู้ใช้ที่ลบบัญชีแล้ว', companyName: '', taxId: '',
+    displayName: ANON_LABEL, companyName: '', taxId: '',
     deleted: true, deletedAt: new Date().toISOString(),
+    tokenVersion: (req.user.tokenVersion || 0) + 1, // เพิกถอน session ที่ยังค้างอยู่ทุกอุปกรณ์ทันที
     consent: null, emailVerified: false, verifyStatus: 'unverified',
   };
   store.update('users', uid, anon);
   logAudit(uid, null, 'account-delete', 'ผู้ใช้ใช้สิทธิขอลบข้อมูลส่วนบุคคล — ลบข้อมูลระบุตัวตนแล้ว คงเหลือเฉพาะเอกสารภาษีที่กฎหมายบังคับให้เก็บ', 'ระบบ');
+  }); // จบ store.transaction
   auth.clearSessionCookie(res);
   sendJson(res, 200, { ok: true });
 }));
@@ -653,9 +796,13 @@ const OTP_SIGN_PURPOSES = {
     const r = store.find('requests', refId);
     return (r && r.toUserId === req.user.id && r.status === 'sent') ? r : null;
   },
+  // เปลี่ยนเลขบัญชีธนาคารรับเงิน — ไม่มี refId เพราะยืนยันตัวผู้ใช้เองเท่านั้น
+  'change-bank': (req) => req.user,
 };
 
 api.post('/api/otp/request', requireAuth(async (req, res) => {
+  // ข้อ: ไม่มี rate limit ที่ /api/otp/request — ป้องกันการยิงส่งอีเมล OTP ถล่มผู้ใช้คนเดียวซ้ำๆ
+  if (rateLimited(res, `otp-req:${req.user.id}`, 8, 10 * 60 * 1000, 'ขอรหัส OTP ถี่เกินไป กรุณารอสักครู่แล้วลองใหม่')) return;
   const b = await readJsonBody(req);
   const checker = OTP_SIGN_PURPOSES[b.purpose];
   if (!checker) return sendJson(res, 400, { error: 'ประเภทการยืนยันไม่ถูกต้อง' });
@@ -672,6 +819,7 @@ api.post('/api/otp/resend', requireAuth(async (req, res) => {
   if (!row || row.userId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบรายการ OTP นี้' });
   const r = otp.regenerate(b.otpId);
   if (!r) return sendJson(res, 400, { error: 'ไม่สามารถขอรหัสใหม่ได้ กรุณาเริ่มรายการใหม่' });
+  if (r.exhausted) return sendJson(res, 429, { error: 'ขอรหัสใหม่ครบจำนวนครั้งที่กำหนดแล้ว กรุณาเริ่มรายการใหม่' });
   if (r.throttled) return sendJson(res, 429, { error: `กรุณารออีก ${r.waitSec} วินาทีก่อนขอรหัสใหม่` });
   const mailResult = await mailer.sendOtpEmail(req.user.email, { code: r.code, purpose: row.purpose, displayName: req.user.displayName });
   sendJson(res, 200, { otpId: b.otpId, ...(mailResult.dev ? { devCode: r.code } : {}) });
@@ -705,14 +853,26 @@ api.delete('/api/contacts/:id', requireAuth((req, res) => {
  *  DOCUMENTS — create
  * ========================================================= */
 function createDoc(user, type, fields, extra) {
+  // ข้อ: ออกเลขที่เอกสารตั้งแต่ตอน "แบบร่าง" ทำให้การลบ draft ทิ้งช่องว่างในลำดับเลข (ผิดหลักการออกเลขต่อเนื่อง)
+  // จึงเลื่อนการออกเลขไปตอนที่เอกสารออกจากสถานะแบบร่างจริงๆ (ดู ensureIssued ด้านล่าง) — docNo เป็น null จนกว่าจะถึงตอนนั้น
   const doc = store.insert('documents', {
-    userId: user.id, type, docNo: makeDocNo(type, user.id),
+    userId: user.id, type, docNo: null,
     status: 'draft', signed: false, signature: null,
+    issueDate: bangkokDateStr(),
     ...fields,
   });
-  snapshotVersion(doc, user.displayName, 'สร้างเอกสาร');
-  logAudit(user.id, doc.id, 'create', `สร้าง ${doc.docNo}`, user.displayName);
+  snapshotVersion(doc, user.displayName, 'สร้างเอกสาร (แบบร่าง ยังไม่ออกเลขที่)');
+  logAudit(user.id, doc.id, 'create', `สร้างแบบร่างเอกสารประเภท ${type}`, user.displayName);
   return doc;
+}
+
+// ออกเลขที่เอกสารจริงตอนที่เอกสารออกจากสถานะ "แบบร่าง" เป็นครั้งแรก (ตอนส่ง/อนุมัติ)
+// ไม่ออกเลขให้เอกสารที่ยกเลิกตั้งแต่ยังเป็นแบบร่าง เพื่อไม่ให้เสียเลขที่ไปฟรีๆ
+function ensureIssued(doc, actorName) {
+  if (doc.docNo) return doc;
+  const updated = store.update('documents', doc.id, { docNo: makeDocNo(doc.type, doc.userId), issueDate: bangkokDateStr() });
+  logAudit(doc.userId, doc.id, 'issue', `ออกเลขที่เอกสาร ${updated.docNo}`, actorName || '');
+  return updated;
 }
 
 api.post('/api/etax/invoice', requireAuth(async (req, res) => {
@@ -723,7 +883,7 @@ api.post('/api/etax/invoice', requireAuth(async (req, res) => {
   if (!v.ok) return sendJson(res, 400, { error: 'ข้อมูลไม่ครบถ้วน', errors: v.errors });
   const items = b.items.filter((i) => i.name || i.price);
   const subtotal = items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.price) || 0), 0);
-  const vat = tax.calcVat(subtotal, b.vatRate ?? 7);
+  const vat = tax.calcVat(subtotal, VAT_RATE_FIXED); // ข้อ 8: ล็อก VAT ไว้ที่ 7% เสมอ ไม่รับจากผู้ใช้
   const doc = createDoc(req.user, 'ETAX', { docPurpose: ['self','send','record'].includes(b.docPurpose) ? b.docPurpose : 'self',
     buyer: b.buyer || '', buyerTaxId: b.buyerTaxId || '', items,
     base: vat.base, vatRate: vat.rate, vat: vat.vat, total: vat.total,
@@ -737,7 +897,7 @@ api.post('/api/ewht/certificate', requireAuth(async (req, res) => {
   const b = await readJsonBody(req);
   const v = validateDocument('EWHT', b);
   if (!v.ok) return sendJson(res, 400, { error: 'ข้อมูลไม่ครบถ้วน', errors: v.errors });
-  const calc = tax.calcWithholding(b.amount, b.rate ?? 3);
+  const calc = tax.calcWithholding(b.amount, validWhtRate(b.rate)); // ข้อ 8: จำกัดอัตราเฉพาะชุดที่กฎหมายกำหนด
   const doc = createDoc(req.user, 'EWHT', { docPurpose: ['self','send','record'].includes(b.docPurpose) ? b.docPurpose : 'self',
     payee: b.payee || '', payeeTaxId: b.payeeTaxId || '', incomeType: b.incomeType || 'มาตรา 40(2)',
     description: b.description || 'ค่าจ้างผลิตเนื้อหา', ...calc, signatureStandard: 'XAdES (จำลอง)', dueDate: b.dueDate || '',
@@ -745,15 +905,61 @@ api.post('/api/ewht/certificate', requireAuth(async (req, res) => {
   sendJson(res, 201, doc);
 }));
 api.post('/api/wht/store', requireAuth(async (req, res) => {
+  const gate = profile.canIssue(req.user, 'WHT');
+  if (!gate.ok) return sendJson(res, 403, { error: gate.error, missing: gate.missing });
   const b = await readJsonBody(req);
   const v = validateDocument('WHT', b);
   if (!v.ok) return sendJson(res, 400, { error: 'ข้อมูลไม่ครบถ้วน', errors: v.errors });
-  const calc = tax.calcWithholding(b.amount, b.rate ?? 3);
+  const calc = tax.calcWithholding(b.amount, validWhtRate(b.rate)); // ข้อ 8: จำกัดอัตราเฉพาะชุดที่กฎหมายกำหนด
   const doc = createDoc(req.user, 'WHT', { docPurpose: 'record',
     payer: b.payer || '', description: b.description || 'ค่าจ้างผลิตเนื้อหา', incomeType: b.incomeType || 'มาตรา 40(2)', ...calc,
   });
   sendJson(res, 201, doc);
 }));
+
+/* =========================================================
+ *  ใบลดหนี้ / ใบเพิ่มหนี้ (ตามประมวลรัษฎากร มาตรา 86/9 และ 86/10)
+ *  ใช้แก้ไขใบกำกับภาษี (ETAX) ที่ออกไปแล้วอย่างถูกต้องตามกฎหมาย แทนการยกเลิกเอกสารทั้งฉบับ
+ * ========================================================= */
+const CREDIT_NOTE_REASONS = ['ลดราคาสินค้า/บริการ', 'สินค้าชำรุด/บกพร่อง', 'รับคืนสินค้า', 'คำนวณราคาผิดพลาดสูงไป', 'ยกเลิกสัญญาบางส่วน', 'อื่น ๆ'];
+const DEBIT_NOTE_REASONS = ['คำนวณราคาผิดพลาดต่ำไป', 'เรียกเก็บเพิ่มเติมตามสัญญา', 'อื่น ๆ'];
+
+function createAdjustmentNote(type, legalRef, reasons) {
+  return requireAuth(async (req, res) => {
+    const gate = profile.canIssue(req.user, 'ETAX');
+    if (!gate.ok) return sendJson(res, 403, { error: gate.error, missing: gate.missing });
+    const b = await readJsonBody(req);
+    const src = store.find('documents', b.refDocId);
+    if (!src || src.userId !== req.user.id || src.type !== 'ETAX') {
+      return sendJson(res, 404, { error: 'ไม่พบใบกำกับภาษีต้นฉบับ หรือไม่ใช่เอกสารของคุณ' });
+    }
+    // มาตรา 86/9, 86/10 ใช้แก้ไข "ใบกำกับภาษีที่ออกไปแล้ว" เท่านั้น ไม่ใช่แบบร่าง/เอกสารที่ยกเลิกไปแล้ว
+    if (!src.docNo || src.status === 'cancelled') {
+      return sendJson(res, 400, { error: 'ออกใบลดหนี้/เพิ่มหนี้ได้เฉพาะใบกำกับภาษีที่ออกเลขที่แล้วและยังไม่ถูกยกเลิกเท่านั้น' });
+    }
+    const errors = [];
+    if (!reasons.includes(b.reason)) errors.push('กรุณาเลือกเหตุผลที่ถูกต้องตามกฎหมาย');
+    const adjustBase = round2(Number(b.amount) || 0);
+    if (!(adjustBase > 0)) errors.push('กรุณาระบุยอดเงินส่วนต่างให้ถูกต้อง');
+    if (errors.length) return sendJson(res, 400, { error: 'ข้อมูลไม่ครบถ้วน', errors });
+    // ใช้อัตรา VAT เดียวกับใบกำกับภาษีต้นฉบับเสมอ ไม่รับอัตราจากผู้ใช้ตรงๆ (ตามหลักข้อ 8)
+    const vat = tax.calcVat(adjustBase, src.vatRate);
+    const doc = createDoc(req.user, type, {
+      docPurpose: ['self', 'send', 'record'].includes(b.docPurpose) ? b.docPurpose : 'self',
+      refDocId: src.id, refDocNo: src.docNo,
+      buyer: src.buyer || '', buyerTaxId: src.buyerTaxId || '',
+      reason: b.reason, note: b.note || '',
+      base: vat.base, vatRate: vat.rate, vat: vat.vat, total: vat.total,
+      legalRef, signatureStandard: 'PAdES (จำลอง)',
+    });
+    logAudit(req.user.id, doc.id, 'create', `ออก${type === 'CREDIT_NOTE' ? 'ใบลดหนี้' : 'ใบเพิ่มหนี้'}อ้างอิง ${src.docNo} (${b.reason})`, req.user.displayName);
+    sendJson(res, 201, doc);
+  });
+}
+
+api.get('/api/etax/adjustment-reasons', (req, res) => sendJson(res, 200, { creditNote: CREDIT_NOTE_REASONS, debitNote: DEBIT_NOTE_REASONS }));
+api.post('/api/etax/credit-note', createAdjustmentNote('CREDIT_NOTE', 'ประมวลรัษฎากร มาตรา 86/9', CREDIT_NOTE_REASONS));
+api.post('/api/etax/debit-note', createAdjustmentNote('DEBIT_NOTE', 'ประมวลรัษฎากร มาตรา 86/10', DEBIT_NOTE_REASONS));
 
 /* =========================================================
  *  เอกสารธุรกิจ + สัญญา (ver5): ใบเสร็จ/ใบแจ้งหนี้/ใบเสนอราคา/PO/ใบส่งมอบงาน/ใบสำคัญจ่าย/สัญญาจ้าง
@@ -770,6 +976,8 @@ api.post('/api/docs/create', requireAuth(async (req, res) => {
   if (![...BIZ_TYPES, ...CONTRACT_TYPES, ...PAPER_TYPES].includes(type)) return sendJson(res, 400, { error: 'ประเภทเอกสารไม่ถูกต้อง' });
   const errors = [];
   if (!b.party) errors.push('กรุณาระบุชื่อคู่สัญญา/คู่ค้า');
+  const partyTaxIdErr = taxIdError(b.partyTaxId, 'คู่สัญญา/คู่ค้า');
+  if (partyTaxIdErr) errors.push(partyTaxIdErr);
   let base = 0, vat = 0, vatRate = 0, items = [];
   if (type === 'POA') {
     if (!b.scope) errors.push('กรุณาระบุขอบเขตอำนาจที่มอบ');
@@ -781,10 +989,20 @@ api.post('/api/docs/create', requireAuth(async (req, res) => {
     base = round2(Number(b.amount) || 0);
     if (!(base > 0)) errors.push('กรุณาระบุยอดเงินที่ชำระ');
   } else {
-    items = (Array.isArray(b.items) ? b.items : []).filter((i) => i.name || i.price);
+    items = validLineItems(b.items);
     if (!items.length) errors.push('กรุณาเพิ่มรายการอย่างน้อย 1 รายการ');
+    errors.push(...lineItemErrors(items));
     base = round2(items.reduce((s2, i) => s2 + (Number(i.qty) || 0) * (Number(i.price) || 0), 0));
-    if (b.includeVat) { vatRate = Number(b.vatRate) || 7; vat = round2(base * vatRate / 100); }
+    // ข้อ 7: จะรวม VAT ในเอกสารทั่วไป (ไม่ใช่ ETAX) ได้เฉพาะบัญชีที่จดทะเบียน VAT แล้วเท่านั้น
+    // (เดิมส่ง includeVat:true ได้แม้ไม่ได้จด VAT)
+    if (b.includeVat) {
+      if (!req.user.vatRegistered) {
+        errors.push('บัญชีนี้ยังไม่ได้จดทะเบียนภาษีมูลค่าเพิ่ม จึงรวม VAT ในเอกสารนี้ไม่ได้');
+      } else {
+        vatRate = 7; // ข้อ 8: ล็อกอัตรา VAT ไว้ที่ 7% ตามกฎหมาย ไม่รับค่าจากผู้ใช้โดยตรง
+        vat = round2(base * vatRate / 100);
+      }
+    }
   }
   if (errors.length) return sendJson(res, 400, { error: 'ข้อมูลไม่ครบถ้วน', errors });
   const doc = createDoc(req.user, type, {
@@ -806,6 +1024,9 @@ api.post('/api/docs/create', requireAuth(async (req, res) => {
 api.post('/api/documents/:id/duplicate', requireAuth((req, res) => {
   const src = ownDoc(req);
   if (!src) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
+  // ข้อ 7: คัดลอกเอกสารก็ต้องผ่านเงื่อนไขการออกเอกสารเหมือนสร้างใหม่ (เดิมข้ามเงื่อนไขนี้ไปทั้งหมด)
+  const gate = profile.canIssue(req.user, src.type);
+  if (!gate.ok) return sendJson(res, 403, { error: gate.error, missing: gate.missing });
   const { id, docNo, status, signed, signature, counterpartySignature, pdfKey, xmlKey, createdAt, updatedAt, ...rest } = src;
   const copy = createDoc(req.user, src.type, { ...rest, signed: false, signature: null, counterpartySignature: null });
   logAudit(req.user.id, copy.id, 'duplicate', `คัดลอกจาก ${src.docNo}`, req.user.displayName);
@@ -834,12 +1055,12 @@ const reqPublic = (r) => {
 
 // ส่งเอกสารให้บัญชีอื่น (ระบุอีเมลผู้ใช้ในระบบ)
 api.post('/api/documents/:id/request', requireAuth(async (req, res) => {
-  const doc = ownDoc(req);
+  let doc = ownDoc(req);
   if (!doc) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
   const b = await readJsonBody(req);
   const email = String(b.toEmail || '').trim().toLowerCase();
   if (!email) return sendJson(res, 400, { error: 'กรุณาระบุอีเมลผู้รับ' });
-  const target = store.findOne('users', (u) => u.email === email);
+  const target = store.whereOne('users', { email });
   if (!target) return sendJson(res, 404, { error: 'ไม่พบบัญชีผู้ใช้อีเมลนี้ในระบบ — คู่ค้าต้องสมัคร TaxFlow ด้วยอีเมลดังกล่าวก่อน' });
   if (target.id === req.user.id) return sendJson(res, 400, { error: 'ไม่สามารถส่งเอกสารหาตัวเองได้' });
   // ข้อ 4: ผู้ออกเอกสารต้องลงนามฝั่งตนเองก่อน จึงส่งขอลายเซ็นจากคู่ค้าได้
@@ -854,8 +1075,10 @@ api.post('/api/documents/:id/request', requireAuth(async (req, res) => {
     purpose, message: b.message || '', dueDate: b.dueDate || '', signAs: b.signAs || '', status: 'sent',
   });
   if (doc.status === 'draft') {
+    doc = ensureIssued(doc, req.user.displayName); // ข้อ: ออกเลขที่จริงตอนส่งเอกสารออกจากแบบร่าง
     const updated = store.update('documents', doc.id, { status: 'pending' });
     snapshotVersion(updated, req.user.displayName, 'ส่งเอกสารให้คู่ค้า');
+    doc = updated;
   }
   logAudit(req.user.id, doc.id, 'send', `ส่ง ${doc.docNo} ถึง ${email} (${purpose === 'sign' ? 'ขอลายเซ็น' : 'ขอตรวจสอบ'}${b.dueDate ? ' ภายใน ' + b.dueDate : ''})`, req.user.displayName);
   const senderName = req.user.companyName || req.user.displayName;
@@ -898,21 +1121,32 @@ api.post('/api/requests/:id/sign', requireAuth(async (req, res) => {
   const b = await readJsonBody(req);
   const doc = store.find('documents', r.docId);
   if (!doc) return sendJson(res, 404, { error: 'เอกสารถูกลบแล้ว' });
+  // ข้อ 5: ต้องตรวจสถานะเอกสารก่อนรับลายเซ็นทุกครั้ง กันกรณีเอกสารถูกยกเลิก/เปลี่ยนสถานะไปแล้ว
+  // แต่คำขอยังค้างอยู่ (เช่น เจ้าของยกเลิกเอกสารหลังส่งคำขอ)
+  if (doc.status !== 'pending') {
+    return sendJson(res, 400, { error: 'เอกสารนี้ไม่อยู่ในสถานะที่รับลายเซ็นได้แล้ว (อาจถูกยกเลิกหรือเปลี่ยนสถานะไปก่อนหน้านี้)' });
+  }
   // ต้องยืนยันด้วยรหัส OTP ที่ส่งไปยังอีเมลก่อนลงนามทุกครั้ง
   const check = otp.verify(b.otpId, b.code, { userId: req.user.id, purpose: 'sign-request', refId: r.id });
   if (!check.ok) return sendJson(res, 400, { error: check.error });
+  if (b.image !== undefined && b.image !== null && !isValidSignatureImage(b.image)) {
+    return sendJson(res, 400, { error: 'รูปลายเซ็นไม่ถูกต้อง' });
+  }
   const signerName = b.signerName || req.user.displayName;
+  // ข้อ 5: คู่ค้าลงนามตอบกลับแล้ว = เอกสารผ่านขั้นตอนอนุมัติ (countersign → approved)
   const updated = store.update('documents', doc.id, {
+    status: 'approved',
     counterpartySignature: {
       signerName, image: b.image || null, signedAt: new Date().toISOString(),
       byUserId: req.user.id, byEmail: req.user.email, signAs: r.signAs || '',
+      contentHash: contentHash(doc),
     },
   });
   store.update('requests', r.id, { status: 'signed', respondedAt: new Date().toISOString() });
-  snapshotVersion(updated, signerName, 'คู่ค้าลงนามตอบกลับ');
-  logAudit(r.fromUserId, doc.id, 'countersign', `${signerName} (${req.user.email}) ลงนามเอกสาร`, signerName);
+  snapshotVersion(updated, signerName, 'คู่ค้าลงนามตอบกลับ — เอกสารอนุมัติแล้ว');
+  logAudit(r.fromUserId, doc.id, 'countersign', `${signerName} (${req.user.email}) ลงนามเอกสาร — สถานะเปลี่ยนเป็นอนุมัติ`, signerName);
   const senderName = req.user.companyName || req.user.displayName;
-  notify(r.fromUserId, 'signed', `${senderName} ลงนามเอกสาร ${doc.docNo} เรียบร้อยแล้ว`, doc.id);
+  notify(r.fromUserId, 'signed', `${senderName} ลงนามเอกสาร ${doc.docNo} เรียบร้อยแล้ว — เอกสารอนุมัติแล้ว`, doc.id);
   sendJson(res, 200, { ok: true });
 }));
 
@@ -922,8 +1156,15 @@ api.post('/api/requests/:id/approve', requireAuth(async (req, res) => {
   if (!r || r.toUserId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบคำขอ' });
   if (r.status !== 'sent') return sendJson(res, 400, { error: 'คำขอนี้ถูกตอบไปแล้ว' });
   const doc = store.find('documents', r.docId);
+  if (!doc) return sendJson(res, 404, { error: 'เอกสารถูกลบแล้ว' });
+  if (doc.status !== 'pending') {
+    return sendJson(res, 400, { error: 'เอกสารนี้ไม่อยู่ในสถานะที่ตรวจสอบได้แล้ว (อาจถูกยกเลิกหรือเปลี่ยนสถานะไปก่อนหน้านี้)' });
+  }
   store.update('requests', r.id, { status: 'approved', respondedAt: new Date().toISOString() });
-  logAudit(r.fromUserId, doc.id, 'review-ok', `${req.user.displayName} ตรวจสอบแล้ว ไม่มีแก้ไข`, req.user.displayName);
+  // ข้อ 5: ผลตรวจสอบ "ผ่าน" จากคู่ค้า = เอกสารอนุมัติแล้ว
+  const updated = store.update('documents', doc.id, { status: 'approved' });
+  snapshotVersion(updated, req.user.displayName, 'คู่ค้าตรวจสอบผ่าน — เอกสารอนุมัติแล้ว');
+  logAudit(r.fromUserId, doc.id, 'review-ok', `${req.user.displayName} ตรวจสอบแล้ว ไม่มีแก้ไข — สถานะเปลี่ยนเป็นอนุมัติ`, req.user.displayName);
   notify(r.fromUserId, 'approved', `${req.user.companyName || req.user.displayName} ตรวจสอบเอกสาร ${doc.docNo} แล้ว — ผ่าน`, doc.id);
   sendJson(res, 200, { ok: true });
 }));
@@ -934,8 +1175,15 @@ api.post('/api/requests/:id/decline', requireAuth(async (req, res) => {
   if (r.status !== 'sent') return sendJson(res, 400, { error: 'คำขอนี้ถูกตอบไปแล้ว' });
   const b = await readJsonBody(req);
   const doc = store.find('documents', r.docId);
+  if (!doc) return sendJson(res, 404, { error: 'เอกสารถูกลบแล้ว' });
+  if (doc.status !== 'pending') {
+    return sendJson(res, 400, { error: 'เอกสารนี้ไม่อยู่ในสถานะที่ตีกลับได้แล้ว (อาจถูกยกเลิกหรือเปลี่ยนสถานะไปก่อนหน้านี้)' });
+  }
   store.update('requests', r.id, { status: 'declined', respondedAt: new Date().toISOString(), declineReason: b.reason || '' });
-  logAudit(r.fromUserId, doc.id, 'declined', `${req.user.displayName} ปฏิเสธ: ${b.reason || '-'}`, req.user.displayName);
+  // ข้อ 5: ตีกลับ = เอกสารไม่อนุมัติ
+  const updated = store.update('documents', doc.id, { status: 'rejected' });
+  snapshotVersion(updated, req.user.displayName, `คู่ค้าตีกลับ: ${b.reason || '-'}`);
+  logAudit(r.fromUserId, doc.id, 'declined', `${req.user.displayName} ปฏิเสธ: ${b.reason || '-'} — สถานะเปลี่ยนเป็นไม่อนุมัติ`, req.user.displayName);
   notify(r.fromUserId, 'rejected', `${req.user.companyName || req.user.displayName} ตีกลับเอกสาร ${doc.docNo}${b.reason ? ' — ' + b.reason : ''}`, doc.id);
   sendJson(res, 200, { ok: true });
 }));
@@ -957,8 +1205,7 @@ api.get('/api/signatures', requireAuth((req, res) => {
 }));
 api.post('/api/signatures', requireAuth(async (req, res) => {
   const b = await readJsonBody(req);
-  if (!b.image || !b.image.startsWith('data:image/')) return sendJson(res, 400, { error: 'รูปลายเซ็นไม่ถูกต้อง' });
-  if (b.image.length > 700 * 1024) return sendJson(res, 413, { error: 'รูปลายเซ็นใหญ่เกินไป' });
+  if (!isValidSignatureImage(b.image)) return sendJson(res, 400, { error: 'รูปลายเซ็นไม่ถูกต้อง' });
   const row = store.insert('signatures', { userId: req.user.id, name: b.name || req.user.displayName, image: b.image });
   logAudit(req.user.id, null, 'signature-save', `บันทึกลายเซ็น "${row.name}" เข้าคลัง`, req.user.displayName);
   sendJson(res, 201, row);
@@ -991,8 +1238,10 @@ api.get('/api/documents', requireAuth((req, res) => {
     (!status || d.status === status) &&
     (!q || (d.docNo || '').toLowerCase().includes(q) || JSON.stringify(d).toLowerCase().includes(q)) &&
     (!contact || (`${d.buyer || ''}${d.payee || ''}${d.payer || ''}`).toLowerCase().includes(contact)) &&
-    (!from || (d.createdAt || '').slice(0, 10) >= from) &&
-    (!to || (d.createdAt || '').slice(0, 10) <= to)
+    // ข้อ: กรองตาม "วันที่ออกเอกสาร" ตามเขตเวลาไทย (issueDate) แทน createdAt แบบ UTC ตรงๆ
+    // (เอกสารเก่าก่อนมีฟิลด์นี้ fallback ไปใช้ createdAt) กันเอกสารที่สร้างช่วงดึกตกไปอยู่วันก่อนหน้าผิดวัน
+    (!from || (d.issueDate || (d.createdAt || '').slice(0, 10)) >= from) &&
+    (!to || (d.issueDate || (d.createdAt || '').slice(0, 10)) <= to)
   ).reverse();
   const withReq = rows.map((d) => {
     const reqs = store.all('requests', (r) => r.docId === d.id);
@@ -1020,29 +1269,55 @@ api.put('/api/documents/:id', requireAuth(async (req, res) => {
   const doc = ownDoc(req);
   if (!doc) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
   if (['approved', 'archived', 'cancelled'].includes(doc.status)) return sendJson(res, 400, { error: 'เอกสารสถานะนี้แก้ไขไม่ได้' });
+  // ใบลดหนี้/ใบเพิ่มหนี้อ้างอิงใบกำกับภาษีต้นฉบับตามกฎหมาย ห้ามแก้ไขเนื้อหาภายหลัง — ยกเลิกแล้วออกใหม่แทน
+  if (['CREDIT_NOTE', 'DEBIT_NOTE'].includes(doc.type)) return sendJson(res, 400, { error: 'ใบลดหนี้/ใบเพิ่มหนี้แก้ไขไม่ได้ — หากข้อมูลผิดพลาดให้ยกเลิกเอกสารนี้แล้วออกฉบับใหม่' });
   const b = await readJsonBody(req);
   let patch = {};
+  const errors = [];
   const GEN_TYPES = [...BIZ_TYPES, ...CONTRACT_TYPES];
   if (GEN_TYPES.includes(doc.type)) {
+    const partyTaxIdErr = taxIdError(b.partyTaxId ?? doc.partyTaxId, 'คู่สัญญา/คู่ค้า');
+    if (partyTaxIdErr) errors.push(partyTaxIdErr);
     patch = { party: b.party ?? doc.party, partyTaxId: b.partyTaxId ?? doc.partyTaxId, note: b.note ?? doc.note, scope: b.scope ?? doc.scope };
     if (b.amount !== undefined || b.fee !== undefined) {
       const base = round2(Number(b.amount ?? b.fee) || doc.base);
+      if (!(base > 0)) errors.push('กรุณาระบุยอดเงินให้ถูกต้อง');
+      // ข้อ 8: VAT ของเอกสารทั่วไปยังคงล็อกไว้ที่ 7% ตามเดิม (ไม่รับอัตราใหม่จากผู้ใช้ตอนแก้ไข)
       const vat = doc.vatRate ? round2(base * doc.vatRate / 100) : 0;
       Object.assign(patch, { base, vat, total: round2(base + vat), net: round2(base + vat) });
     }
   } else if (doc.type === 'ETAX') {
-    const items = Array.isArray(b.items) ? b.items.filter((i) => i.name || i.price) : doc.items;
+    const items = b.items !== undefined ? validLineItems(b.items) : doc.items;
+    if (!items.length) errors.push('กรุณาเพิ่มรายการอย่างน้อย 1 รายการ');
+    errors.push(...lineItemErrors(items));
+    const buyerTaxIdErr = taxIdError(b.buyerTaxId ?? doc.buyerTaxId, 'ผู้ซื้อ');
+    if (buyerTaxIdErr) errors.push(buyerTaxIdErr);
     const subtotal = items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.price) || 0), 0);
-    const vat = tax.calcVat(subtotal, b.vatRate ?? doc.vatRate);
+    const vat = tax.calcVat(subtotal, VAT_RATE_FIXED); // ข้อ 8: ล็อก VAT ไว้ที่ 7% เสมอ
     patch = { buyer: b.buyer ?? doc.buyer, buyerTaxId: b.buyerTaxId ?? doc.buyerTaxId, items, base: vat.base, vatRate: vat.rate, vat: vat.vat, total: vat.total };
   } else {
-    const calc = tax.calcWithholding(b.amount ?? doc.base, b.rate ?? doc.rate);
+    const amount = Number(b.amount ?? doc.base);
+    if (!(amount > 0)) errors.push('กรุณาระบุยอดเงินให้ถูกต้อง');
+    if (doc.type === 'EWHT') {
+      const payeeTaxIdErr = taxIdError(b.payeeTaxId ?? doc.payeeTaxId, 'ผู้รับเงิน');
+      if (payeeTaxIdErr) errors.push(payeeTaxIdErr);
+    }
+    const calc = tax.calcWithholding(amount, validWhtRate(b.rate ?? doc.rate, doc.rate)); // ข้อ 8: จำกัดอัตราเฉพาะชุดที่กฎหมายกำหนด
     patch = { payee: b.payee ?? doc.payee, payer: b.payer ?? doc.payer, description: b.description ?? doc.description, incomeType: b.incomeType ?? doc.incomeType, ...calc };
+  }
+  if (errors.length) return sendJson(res, 400, { error: 'ข้อมูลไม่ถูกต้อง', errors });
+  // ข้อ 6: เนื้อหาที่ลงนามไปแล้วเปลี่ยน = ลายเซ็นเดิมใช้อ้างอิงไม่ได้อีกต่อไป ต้องล้างทิ้งแล้วให้ลงนามใหม่
+  // (กันกรณีแก้ยอดเงินหลังลงนามแล้วลายเซ็นเดิมยังติดอยู่กับเนื้อหาใหม่)
+  const hadSignature = !!(doc.signature || doc.counterpartySignature);
+  if (hadSignature) {
+    Object.assign(patch, { signed: false, signature: null, counterpartySignature: null });
   }
   const updated = store.update('documents', doc.id, patch);
   snapshotVersion(updated, req.user.displayName, b.note || 'แก้ไขเอกสาร');
-  logAudit(req.user.id, doc.id, 'edit', `แก้ไข ${doc.docNo}`, req.user.displayName);
-  notify(req.user.id, 'edit', `มีการแก้ไขเอกสาร ${doc.docNo}`, doc.id);
+  logAudit(req.user.id, doc.id, 'edit', `แก้ไข ${doc.docNo}${hadSignature ? ' — ลายเซ็นเดิมถูกล้างเพราะเนื้อหาเปลี่ยน ต้องลงนามใหม่' : ''}`, req.user.displayName);
+  notify(req.user.id, 'edit', hadSignature
+    ? `แก้ไขเอกสาร ${doc.docNo} — ลายเซ็นเดิมถูกล้างแล้ว กรุณาลงนามใหม่`
+    : `มีการแก้ไขเอกสาร ${doc.docNo}`, doc.id);
   sendJson(res, 200, updated);
 }));
 
@@ -1052,17 +1327,40 @@ api.post('/api/documents/:id/status', requireAuth(async (req, res) => {
   const b = await readJsonBody(req);
   const next = b.status;
   if (!(STATUS_FLOW[doc.status] || []).includes(next)) return sendJson(res, 400, { error: `เปลี่ยนจาก "${STATUS_LABEL[doc.status]}" เป็น "${STATUS_LABEL[next] || next}" ไม่ได้` });
+  // ข้อ 5: เอกสารที่อยู่ระหว่างส่งให้คู่ค้าลงนาม/ตรวจสอบ (status=pending + docPurpose=send)
+  // ต้องอนุมัติผ่านการลงนามหรือผลตรวจของคู่ค้าเท่านั้น เจ้าของเอกสารเปลี่ยนเป็น "อนุมัติ" เองไม่ได้
+  // (ก่อนส่ง — ยังเป็น draft — ยังปิดงานเองได้ตามปกติ เพราะยังไม่มีคำขอค้างอยู่ที่ฝั่งคู่ค้า)
+  if (next === 'approved' && doc.status === 'pending' && (doc.docPurpose || 'self') === 'send') {
+    return sendJson(res, 400, { error: 'เอกสารนี้ถูกส่งให้คู่ค้าลงนาม/ตรวจสอบแล้ว ต้องรอผลจากคู่ค้าเท่านั้น ไม่สามารถอนุมัติเองได้' });
+  }
+  // ข้อ: ออกเลขที่จริงตอนเอกสารออกจากสถานะแบบร่างเป็นครั้งแรก (ยกเว้นยกเลิกตั้งแต่ยังเป็นแบบร่าง — ไม่ต้องออกเลข)
+  if (doc.status === 'draft' && next !== 'cancelled') ensureIssued(doc, req.user.displayName);
   const updated = store.update('documents', doc.id, { status: next, statusNote: b.note || '' });
+  if (next === 'cancelled') {
+    const cancelledAt = new Date().toISOString();
+    store.update('documents', doc.id, { cancelledAt, cancelReason: b.note || '' });
+    // ยกเลิกคำขอลงนาม/ตรวจสอบที่ยังค้างอยู่ด้วย กันคู่ค้าลงนามเอกสารที่ถูกยกเลิกไปแล้ว
+    store.all('requests', (r) => r.docId === doc.id && r.status === 'sent')
+      .forEach((r) => store.update('requests', r.id, { status: 'cancelled' }));
+  }
   snapshotVersion(updated, req.user.displayName, `เปลี่ยนสถานะเป็น ${STATUS_LABEL[next]}`);
   logAudit(req.user.id, doc.id, 'status', `${STATUS_LABEL[doc.status]} → ${STATUS_LABEL[next]}`, req.user.displayName);
-  const notifyMap = { approved: `เอกสาร ${doc.docNo} ได้รับการอนุมัติ`, rejected: `เอกสาร ${doc.docNo} ถูกตีกลับ (ไม่อนุมัติ)`, pending: `เอกสาร ${doc.docNo} ถูกส่งเข้ารอตรวจสอบ` };
+  const notifyMap = { approved: `เอกสาร ${updated.docNo} ได้รับการอนุมัติ`, rejected: `เอกสาร ${updated.docNo} ถูกตีกลับ (ไม่อนุมัติ)`, pending: `เอกสาร ${updated.docNo} ถูกส่งเข้ารอตรวจสอบ` };
   if (notifyMap[next]) notify(req.user.id, next, notifyMap[next], doc.id);
   sendJson(res, 200, updated);
 }));
 
+// ลบถาวรได้เฉพาะเอกสารสถานะ "แบบร่าง" เท่านั้น (ข้อ 41 ของสเปก + หลักเก็บเอกสารภาษี 5 ปี)
+// สถานะอื่นต้อง "ยกเลิก" ผ่าน /api/documents/:id/status (status=cancelled) พร้อมระบุเหตุผล
+// เพื่อไม่ให้เลขที่เอกสารขาดช่วงและยังมีร่องรอยตรวจสอบย้อนหลังได้
 api.delete('/api/documents/:id', requireAuth((req, res) => {
   const doc = ownDoc(req);
   if (!doc) return sendJson(res, 404, { error: 'ไม่พบเอกสาร' });
+  if (doc.status !== 'draft') {
+    return sendJson(res, 400, {
+      error: 'ลบเอกสารที่ไม่ใช่แบบร่างไม่ได้ — เอกสารที่ออกแล้วต้อง "ยกเลิก" พร้อมระบุเหตุผลแทน เพื่อรักษาลำดับเลขที่เอกสารและร่องรอยตรวจสอบตามกฎหมาย',
+    });
+  }
   store.all('attachments', (a) => a.docId === doc.id).forEach((a) => { try { fs.unlinkSync(path.join(store.UPLOAD_DIR, a.storedName)); } catch {} store.remove('attachments', a.id); });
   store.remove('documents', doc.id);
   logAudit(req.user.id, null, 'delete', `ลบเอกสาร ${doc.docNo}`, req.user.displayName);
@@ -1092,6 +1390,7 @@ api.post('/api/documents/:id/attachments', requireAuth(async (req, res) => {
   if (!ALLOWED_MIME[b.mime]) return sendJson(res, 415, { error: 'รองรับเฉพาะไฟล์ PDF, PNG, JPG, WEBP เท่านั้น' });
   const buf = Buffer.from(b.dataBase64, 'base64');
   if (buf.length > MAX_SIZE) return sendJson(res, 413, { error: 'ไฟล์มีขนาดเกิน 5 MB' });
+  if (!magicbytes.matches(buf, b.mime)) return sendJson(res, 415, { error: 'ไฟล์ไม่ตรงกับชนิดที่แจ้ง กรุณาอัปโหลดไฟล์จริง' });
   const storedName = crypto.randomBytes(12).toString('hex') + '.' + ALLOWED_MIME[b.mime];
   fs.writeFileSync(path.join(store.UPLOAD_DIR, storedName), buf);
   const att = store.insert('attachments', {
@@ -1132,7 +1431,10 @@ api.post('/api/documents/:id/sign', requireAuth(async (req, res) => {
   // ต้องยืนยันด้วยรหัส OTP ที่ส่งไปยังอีเมลก่อนลงนามทุกครั้ง
   const check = otp.verify(b.otpId, b.code, { userId: req.user.id, purpose: 'sign-doc', refId: doc.id });
   if (!check.ok) return sendJson(res, 400, { error: check.error });
-  const signature = { signerName: b.signerName || req.user.displayName, signedAt: new Date().toISOString(), image: b.image || null };
+  if (b.image !== undefined && b.image !== null && !isValidSignatureImage(b.image)) {
+    return sendJson(res, 400, { error: 'รูปลายเซ็นไม่ถูกต้อง' });
+  }
+  const signature = { signerName: b.signerName || req.user.displayName, signedAt: new Date().toISOString(), image: b.image || null, contentHash: contentHash(doc) };
   const updated = store.update('documents', doc.id, { signed: true, signature });
   snapshotVersion(updated, req.user.displayName, 'ลงลายมือชื่อดิจิทัล (ยืนยันด้วย OTP)');
   logAudit(req.user.id, doc.id, 'sign', `ลงนามโดย ${signature.signerName} (ยืนยันด้วย OTP)`, req.user.displayName);
@@ -1147,9 +1449,13 @@ function ensureShare(doc, userId) {
   if (!share) share = store.insert('shares', { token: crypto.randomBytes(10).toString('hex'), docId: doc.id, userId });
   return share;
 }
+// ข้อ: URL ใน QR ไม่ควรสร้างจาก header Host ที่ผู้ร้องขอกำหนดเองได้ (Host header injection)
+// และไม่ควรบังคับเป็น http:// เสมอ — ให้ตั้งค่า PUBLIC_BASE_URL ใน production แทน
+// (เช่น https://taxflow.example.com) มิฉะนั้น fallback ไปใช้ Host header สำหรับพัฒนา/ทดสอบในเครื่อง
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 function verifyUrl(req, token) {
-  const host = req.headers.host || `localhost:${PORT}`;
-  return `http://${host}/verify.html?token=${token}`;
+  const base = PUBLIC_BASE_URL || `http://${req.headers.host || `localhost:${PORT}`}`;
+  return `${base}/verify.html?token=${token}`;
 }
 
 api.post('/api/documents/:id/share', requireAuth((req, res) => {
@@ -1174,6 +1480,10 @@ api.get('/api/verify/:token', (req, res) => {
   const doc = store.find('documents', share.docId);
   if (!doc) return sendJson(res, 404, { valid: false, error: 'เอกสารถูกลบแล้ว' });
   const issuer = store.find('users', doc.userId);
+  // ข้อ 6: เทียบแฮชเนื้อหาปัจจุบันกับแฮชตอนลงนาม เพื่อบอกผู้ตรวจว่าเอกสารถูกแก้ไขหลังลงนามหรือไม่
+  // (ปกติจะตรงกันเสมอเพราะระบบล้างลายเซ็นทิ้งทันทีที่มีการแก้ไข — นี่คือด่านตรวจซ้ำ)
+  const currentHash = contentHash(doc);
+  const tampered = !!(doc.signature && doc.signature.contentHash && doc.signature.contentHash !== currentHash);
   sendJson(res, 200, {
     valid: true, docNo: doc.docNo, type: doc.type, status: doc.status,
     counterparty: doc.buyer || doc.payee || doc.payer || '',
@@ -1181,6 +1491,7 @@ api.get('/api/verify/:token', (req, res) => {
     signed: doc.signed, signerName: doc.signature ? doc.signature.signerName : null,
     signedAt: doc.signature ? doc.signature.signedAt : null,
     issuer: issuer ? (issuer.companyName || issuer.displayName) : '', createdAt: doc.createdAt,
+    contentHash: currentHash, tampered,
   });
 });
 
@@ -1259,7 +1570,7 @@ api.get('/api/export/xls', requireAuth((req, res) => {
  *  เก็บไฟล์เอกสารราชการ/ธุรกิจ เช่น ภ.ง.ด.90, ภ.พ.20, สัญญาจ้าง ฯลฯ
  * ========================================================= */
 const LIB_ALLOWED_MIME = { 'application/pdf': 'pdf', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
-const LIB_MAX_SIZE = 10 * 1024 * 1024; // 10 MB สำหรับเอกสารสแกน
+const LIB_MAX_SIZE = 5 * 1024 * 1024; // 5 MB — ให้ตรงกับที่ระบุไว้ในสเปก (โค้ดเดิมเขียนไว้ 10 MB ไม่ตรงกับเอกสาร)
 
 api.get('/api/library', requireAuth((req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -1279,9 +1590,10 @@ api.post('/api/library', requireAuth(async (req, res) => {
   if (!b.dataBase64) return sendJson(res, 400, { error: 'ไม่พบไฟล์' });
   if (!LIB_ALLOWED_MIME[b.mime]) return sendJson(res, 415, { error: 'รองรับเฉพาะไฟล์ PDF, PNG, JPG, WEBP' });
   const buf = Buffer.from(b.dataBase64, 'base64');
-  if (buf.length > LIB_MAX_SIZE) return sendJson(res, 413, { error: 'ไฟล์มีขนาดเกิน 10 MB' });
-  const storedName = 'lib_' + crypto.randomBytes(12).toString('hex') + '.' + LIB_ALLOWED_MIME[b.mime];
-  fs.writeFileSync(path.join(store.UPLOAD_DIR, storedName), buf);
+  if (buf.length > LIB_MAX_SIZE) return sendJson(res, 413, { error: 'ไฟล์มีขนาดเกิน 5 MB' });
+  if (!magicbytes.matches(buf, b.mime)) return sendJson(res, 415, { error: 'ไฟล์ไม่ตรงกับชนิดที่แจ้ง กรุณาอัปโหลดไฟล์จริง' });
+  // ข้อ PDPA: ไฟล์ในคลังเอกสาร (เช่น ภ.ง.ด.90) อ่อนไหวพอๆ กับเอกสาร KYC จึงต้องเข้ารหัสแบบเดียวกัน
+  const storedName = filestore.writeEncrypted(store.UPLOAD_DIR, buf, LIB_ALLOWED_MIME[b.mime]);
   const row = store.insert('library', {
     userId: req.user.id, category: b.category,
     title: b.title || b.filename || 'เอกสาร', filename: b.filename || storedName,
@@ -1297,7 +1609,7 @@ api.get('/api/library/:id/file', requireAuth((req, res) => {
   const l = store.find('library', req.params.id);
   if (!l || l.userId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบไฟล์' });
   try {
-    const buf = fs.readFileSync(path.join(store.UPLOAD_DIR, l.storedName));
+    const buf = filestore.readEncrypted(store.UPLOAD_DIR, l.storedName);
     res.writeHead(200, { 'Content-Type': l.mime, 'Content-Disposition': 'inline; filename="file"', 'Content-Length': buf.length });
     res.end(buf);
   } catch { sendJson(res, 404, { error: 'ไฟล์หาย' }); }
@@ -1306,7 +1618,7 @@ api.get('/api/library/:id/file', requireAuth((req, res) => {
 api.delete('/api/library/:id', requireAuth((req, res) => {
   const l = store.find('library', req.params.id);
   if (!l || l.userId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบไฟล์' });
-  try { fs.unlinkSync(path.join(store.UPLOAD_DIR, l.storedName)); } catch {}
+  filestore.removeFile(store.UPLOAD_DIR, l.storedName);
   store.remove('library', l.id);
   logAudit(req.user.id, null, 'library-del', `ลบเอกสาร "${l.title}" จากคลัง`, req.user.displayName);
   sendJson(res, 200, { deleted: true });
@@ -1348,7 +1660,7 @@ api.get('/api/creator/summary', requireAuth((req, res) => {
   const docs = store.all('documents', (d) => d.userId === req.user.id && d.type === 'WHT');
   const gross = docs.reduce((s, d) => s + (Number(d.base) || 0), 0);
   const whtPaid = docs.reduce((s, d) => s + (Number(d.wht) || 0), 0);
-  sendJson(res, 200, { documentCount: docs.length, grossIncome: round2(gross), withholdingPaid: round2(whtPaid), estimate: tax.estimatePersonalIncomeTax(gross), status: statusCounts(docs) });
+  sendJson(res, 200, { documentCount: docs.length, grossIncome: round2(gross), withholdingPaid: round2(whtPaid), estimate: tax.estimatePersonalIncomeTax(gross, { withholdingPaid: whtPaid }), status: statusCounts(docs) });
 }));
 api.get('/api/agency/summary', requireAuth((req, res) => {
   const docs = store.all('documents', (d) => d.userId === req.user.id);
@@ -1365,7 +1677,13 @@ api.get('/api/agency/summary', requireAuth((req, res) => {
  * ========================================================= */
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
 function serveStatic(req, res) {
-  let urlPath = decodeURIComponent(req.url.split('?')[0]);
+  let urlPath;
+  try {
+    urlPath = decodeURIComponent(req.url.split('?')[0]);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+    return res.end('<h1>400 Bad Request</h1>');
+  }
   if (urlPath === '/') urlPath = '/index.html';
   const filePath = path.join(PUBLIC_DIR, path.normalize(urlPath));
   if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); return res.end('Forbidden'); }
@@ -1376,14 +1694,27 @@ function serveStatic(req, res) {
   });
 }
 
+// ป้องกัน XSS/MIME-sniffing เป็นชั้นที่สอง (defense in depth) — ใช้กับทุก response
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'SAMEORIGIN',
+  'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'",
+};
+
 http.createServer(async (req, res) => {
+  for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
   const urlPath = req.url.split('?')[0];
   if (urlPath.startsWith('/api/')) {
-    const matched = api.match(req.method, urlPath);
-    if (!matched) return sendJson(res, 404, { error: 'ไม่พบ endpoint นี้' });
-    req.params = matched.params;
-    try { await matched.handler(req, res); }
-    catch (err) { console.error('API error:', err); sendJson(res, 500, { error: 'เกิดข้อผิดพลาดภายในระบบ' }); }
+    try {
+      const matched = api.match(req.method, urlPath);
+      if (!matched) return sendJson(res, 404, { error: 'ไม่พบ endpoint นี้' });
+      if (matched.error) return sendJson(res, matched.error, { error: 'คำขอไม่ถูกต้อง' });
+      req.params = matched.params;
+      await matched.handler(req, res);
+    } catch (err) {
+      console.error('API error:', err);
+      sendJson(res, err && err.statusCode ? err.statusCode : 500, { error: err && err.statusCode ? err.message : 'เกิดข้อผิดพลาดภายในระบบ' });
+    }
     return;
   }
   serveStatic(req, res);
@@ -1396,7 +1727,7 @@ http.createServer(async (req, res) => {
   console.log(`  ฐานข้อมูล (SQLite): ${path.relative(process.cwd(), store.DB_FILE)}`);
   console.log(`  ผู้ใช้ในระบบ: ${store.count('users')} บัญชี | เอกสาร: ${store.count('documents')} | คลังเอกสาร: ${store.count('library')} | คู่ค้า: ${store.count('contacts')}`);
   console.log(`  คู่มือการใช้งาน: http://localhost:${PORT}/guide.html`);
-  console.log(`  ล้างข้อมูลหมดอายุตามนโยบายเก็บรักษา: OTP ${purged.otpRemoved} รายการ, แจ้งเตือน ${purged.notifyRemoved} รายการ`);
+  console.log(`  ล้างข้อมูลหมดอายุตามนโยบายเก็บรักษา: OTP ${purged.otpRemoved} รายการ, แจ้งเตือน ${purged.notifyRemoved} รายการ, บัญชีที่ไม่ยืนยันอีเมลเกิน 24 ชม. ${purged.unverifiedRemoved || 0} บัญชี`);
   if (seeded.length) {
     console.log(`\n  สร้างบัญชีผู้ใช้ตัวอย่างให้แล้ว (เข้าสู่ระบบเพื่อทดลองได้ทันที):`);
     for (const u of seeded) console.log(`    • ${u.email}  (${u.role})  รหัสผ่าน: ${u.password}`);

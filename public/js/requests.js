@@ -13,18 +13,18 @@ async function loadInbox() {
     <div class="rq-card ${r.overdue ? 'overdue' : ''}">
       <div class="rq-head">
         <div>
-          <b>${DOC_LABEL[r.doc?.type] || r.doc?.type || 'เอกสาร'}</b>
-          <span class="docno" style="font-size:12px;margin-left:6px">${r.doc?.docNo || ''}</span>
+          <b>${esc(DOC_LABEL[r.doc?.type] || r.doc?.type || 'เอกสาร')}</b>
+          <span class="docno" style="font-size:12px;margin-left:6px">${esc(r.doc?.docNo || '')}</span>
         </div>
         <div>${RQ_ST[r.status] || r.status}</div>
       </div>
       <div class="rq-body">
-        จาก <b>${r.fromName}</b> <small class="muted">(${r.fromEmail})</small> ·
+        จาก <b>${esc(r.fromName)}</b> <small class="muted">(${esc(r.fromEmail)})</small> ·
         ${r.purpose === 'sign' ? 'ขอให้คุณ<b>ลงนาม</b>' : 'ขอให้คุณ<b>ตรวจสอบ</b>'}
-        ${r.signAs ? 'ในฐานะ <b>' + r.signAs + '</b>' : ''}
-        ${r.dueDate ? ` · ภายในวันที่ <b${r.overdue ? ' style="color:var(--danger)"' : ''}>${r.dueDate}${r.overdue ? ' (เกินกำหนด!)' : ''}</b>` : ''}
+        ${r.signAs ? 'ในฐานะ <b>' + esc(r.signAs) + '</b>' : ''}
+        ${r.dueDate ? ` · ภายในวันที่ <b${r.overdue ? ' style="color:var(--danger)"' : ''}>${esc(r.dueDate)}${r.overdue ? ' (เกินกำหนด!)' : ''}</b>` : ''}
         ${r.doc && r.doc.total ? ` · ยอด ฿${baht(r.doc.total)}` : ''}
-        ${r.message ? `<div class="rq-msg">ข้อความ: ${r.message}</div>` : ''}
+        ${r.message ? `<div class="rq-msg">ข้อความ: ${esc(r.message)}</div>` : ''}
       </div>
       <div class="btn-row">
         <a class="btn btn-ghost btn-sm" href="/api/requests/${r.id}/pdf" target="_blank">เปิดดูเอกสาร</a>
@@ -61,11 +61,11 @@ async function openReqSign(reqId) {
   wrap.innerHTML = `
     <div class="modal">
       <div class="modal-top"><h3>ลงนามเอกสาร</h3><button class="icon-btn" onclick="document.getElementById('rq-sign-modal').remove()">✕</button></div>
-      <div class="field"><label>ชื่อผู้ลงนาม</label><input id="rqs-name" value="${(ME && ME.displayName) || ''}"></div>
+      <div class="field"><label>ชื่อผู้ลงนาม</label><input id="rqs-name" value="${esc((ME && ME.displayName) || '')}"></div>
       ${sigs.length ? `
         <div class="mlabel">เลือกจากคลังลายเซ็นของคุณ</div>
         <div class="saved-sig-list" style="margin-bottom:14px">
-          ${sigs.map((x) => `<div class="saved-sig-card"><img src="${x.image}"><div class="ssc-name">${x.name}</div>
+          ${sigs.map((x) => `<div class="saved-sig-card"><img src="${esc(x.image)}"><div class="ssc-name">${esc(x.name)}</div>
             <button class="btn btn-solid btn-sm" onclick="reqSignWith('${x.id}')">ใช้ลงนาม</button></div>`).join('')}
         </div>
 ` : ''}

@@ -58,7 +58,7 @@ function renderModal(d) {
     <div class="modal modal-lg">
       <div class="modal-top">
         <div>
-          <div class="docno" style="font-size:13px">${d.docNo}</div>
+          <div class="docno" style="font-size:13px">${d.docNo ? esc(d.docNo) : 'แบบร่าง — ยังไม่ออกเลขที่'}</div>
           <h3>${DOC_LABEL[d.type] || d.type} ${statusChip(d.status)}</h3>
         </div>
         <button class="icon-btn" onclick="closeModal()">✕</button>
@@ -141,11 +141,11 @@ function renderTabInner(t, body) {
       purposeBanner = `<div class="wait-banner">
         <div class="wait-spin"></div>
         <div><b>รอการอนุมัติ / ลงนามจากคู่ค้า</b><br>
-        <small>ส่งถึง <b>${ar.toName || ar.toEmail}</b> (${ar.toEmail}) · ${ar.purpose === 'sign' ? 'ขอลายเซ็น' : 'ขอตรวจสอบ'}${ar.dueDate ? ' · ภายในวันที่ ' + ar.dueDate : ''}${ar.overdue ? ' · <b style="color:var(--danger)">เกินกำหนด</b>' : ''}</small></div>
+        <small>ส่งถึง <b>${esc(ar.toName || ar.toEmail)}</b> (${esc(ar.toEmail)}) · ${ar.purpose === 'sign' ? 'ขอลายเซ็น' : 'ขอตรวจสอบ'}${ar.dueDate ? ' · ภายในวันที่ ' + esc(ar.dueDate) : ''}${ar.overdue ? ' · <b style="color:var(--danger)">เกินกำหนด</b>' : ''}</small></div>
       </div>`;
     }
     if (d.status === 'pending' && d.counterpartySignature) {
-      purposeBanner = `<div class="status-help" style="background:#E9F7EF;border-color:#BDE5CE">คู่ค้าลงนามตอบกลับแล้ว (${d.counterpartySignature.signerName}) — กด "อนุมัติ" เพื่อปิดงานเอกสารฉบับนี้</div>`;
+      purposeBanner = `<div class="status-help" style="background:#E9F7EF;border-color:#BDE5CE">คู่ค้าลงนามตอบกลับแล้ว (${esc(d.counterpartySignature.signerName)}) — กด "อนุมัติ" เพื่อปิดงานเอกสารฉบับนี้</div>`;
     }
     body.innerHTML = `
       ${statusStepper(d.status)}
@@ -154,8 +154,8 @@ function renderTabInner(t, body) {
       ${purposeBanner}
       ${draftHint}
       <div class="kv"><span>จุดประสงค์</span><b>${(typeof PURPOSE_LABEL !== 'undefined' && PURPOSE_LABEL[pr]) || 'ใช้ภายใน'}</b></div>
-      ${d.signature ? `<div class="kv"><span>ลายเซ็นผู้ออกเอกสาร</span><b class="sig-chip">${d.signature.image ? `<img src="${d.signature.image}">` : ''}${d.signature.signerName}</b></div>` : ''}
-      ${ar ? `<div class="kv"><span>ส่งถึง</span><b>${ar.toName || ar.toEmail} <small style="color:var(--ink-soft);font-weight:500">(${ar.toEmail})</small></b></div>` : ''}
+      ${d.signature ? `<div class="kv"><span>ลายเซ็นผู้ออกเอกสาร</span><b class="sig-chip">${d.signature.image ? `<img src="${esc(d.signature.image)}">` : ''}${esc(d.signature.signerName)}</b></div>` : ''}
+      ${ar ? `<div class="kv"><span>ส่งถึง</span><b>${esc(ar.toName || ar.toEmail)} <small style="color:var(--ink-soft);font-weight:500">(${esc(ar.toEmail)})</small></b></div>` : ''}
       <div class="kv"><span>คู่ค้า/ลูกค้า</span><b>${cp}</b></div>
       <div class="kv"><span>ฐานภาษี</span><b>฿${baht(d.base)}</b></div>
       <div class="kv"><span>${isWht ? 'ภาษีหัก ณ ที่จ่าย' : 'VAT'}</span><b>฿${baht(taxVal)}</b></div>
@@ -166,7 +166,10 @@ function renderTabInner(t, body) {
       <div class="btn-row" style="margin-top:18px;border-top:1px solid var(--line);padding-top:16px">
         <a class="btn btn-ghost btn-sm" href="/api/documents/${d.id}/pdf" target="_blank">เปิด PDF / พิมพ์</a>
         <button class="btn btn-ghost btn-sm" onclick="duplicateDoc(${d.id})">คัดลอกเป็นฉบับใหม่</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteDoc(${d.id})">ลบเอกสาร</button>
+        ${d.type === 'ETAX' && d.status === 'approved' ? `
+          <button class="btn btn-ghost btn-sm" onclick="issueAdjustmentNote(${d.id},'credit-note')">ออกใบลดหนี้</button>
+          <button class="btn btn-ghost btn-sm" onclick="issueAdjustmentNote(${d.id},'debit-note')">ออกใบเพิ่มหนี้</button>` : ''}
+        ${d.status === 'draft' ? `<button class="btn btn-danger btn-sm" onclick="deleteDoc(${d.id})">ลบเอกสาร</button>` : ''}
       </div>`;
   }
 
@@ -216,7 +219,7 @@ function renderTabInner(t, body) {
   if (t === 'files') {
     const list = (d.attachments || []).map((a) => `
       <div class="att-item">
-        <div class="att-meta"><b>${KIND_LABEL[a.kind] || a.kind}</b><small>${a.filename} · ${Math.round((a.size || 0) / 1024)} KB</small></div>
+        <div class="att-meta"><b>${KIND_LABEL[a.kind] || a.kind}</b><small>${esc(a.filename)} · ${Math.round((a.size || 0) / 1024)} KB</small></div>
         <div class="btn-row">
           <a class="btn btn-ghost btn-sm" href="/api/attachments/${a.id}" target="_blank">เปิด</a>
           <button class="btn btn-danger btn-sm" onclick="delAttachment(${a.id})">ลบ</button>
@@ -329,11 +332,11 @@ function renderTabInner(t, body) {
     const vers = [...(d.versions || [])].reverse().map((v) => `
       <div class="hist-item">
         <div class="hist-dot">${v.version}</div>
-        <div><b>เวอร์ชัน ${v.version}</b> — ${v.note || ''}<br>
-        <small class="muted">${v.editor || '-'} · ${fmtDate(v.at)}</small>
+        <div><b>เวอร์ชัน ${v.version}</b> — ${esc(v.note || '')}<br>
+        <small class="muted">${esc(v.editor || '-')} · ${fmtDate(v.at)}</small>
         <a class="muted" style="text-decoration:underline;cursor:pointer;font-size:11px" onclick='alert(JSON.stringify(${JSON.stringify(JSON.stringify(v.snapshot || {}))}, null, 2).slice(0, 1200))'>ดูข้อมูลเวอร์ชันนี้</a></div>
       </div>`).join('') || '<p class="muted">ไม่มีประวัติ</p>';
-    const audit = (d.audit || []).map((a) => `<div class="audit-line"><b>${a.action}</b> ${a.detail} <small class="muted">· ${fmtDate(a.at)}</small></div>`).join('') || '<p class="muted">ไม่มีบันทึก</p>';
+    const audit = (d.audit || []).map((a) => `<div class="audit-line"><b>${esc(a.action)}</b> ${esc(a.detail)} <small class="muted">· ${fmtDate(a.at)}</small></div>`).join('') || '<p class="muted">ไม่มีบันทึก</p>';
     const tlEvents = (d.audit || []).filter((a) => ['create', 'status', 'send', 'countersign', 'sign', 'review-ok', 'declined', 'duplicate'].includes(a.action)).reverse();
     const timeline = tlEvents.length ? `
       <div class="mlabel">ไทม์ไลน์เอกสาร</div>
@@ -404,7 +407,28 @@ async function saveEditGen(id) {
 async function duplicateDoc(id) {
   const { ok, data } = await api.post(`/api/documents/${id}/duplicate`, {});
   if (!ok) return toast(data.error || 'คัดลอกไม่สำเร็จ', 'err');
-  toast('คัดลอกเป็นเอกสารฉบับใหม่ ' + data.docNo + ' (แบบร่าง)');
+  toast('คัดลอกเป็นเอกสารฉบับใหม่แบบร่างแล้ว (ยังไม่ออกเลขที่จนกว่าจะส่ง/อนุมัติ)');
+  await openDoc(data.id);
+  onChangeCb && onChangeCb();
+}
+
+// ออกใบลดหนี้/ใบเพิ่มหนี้อ้างอิงใบกำกับภาษีนี้ (มาตรา 86/9, 86/10)
+async function issueAdjustmentNote(refDocId, kind) {
+  const isCredit = kind === 'credit-note';
+  const { creditNote, debitNote } = await api.get('/api/etax/adjustment-reasons');
+  const reasons = isCredit ? creditNote : debitNote;
+  const reason = await uiPrompt(
+    `เหตุผล (เลือกพิมพ์อย่างใดอย่างหนึ่ง): ${reasons.join(' / ')}`,
+    { title: isCredit ? 'ออกใบลดหนี้' : 'ออกใบเพิ่มหนี้', placeholder: reasons[0] });
+  if (!reason) return;
+  const amountStr = await uiPrompt('ระบุยอดเงินส่วนต่าง (ก่อน VAT) เป็นตัวเลข', { title: 'ยอดเงินส่วนต่าง', placeholder: '1000' });
+  if (!amountStr) return;
+  const amount = Number(amountStr);
+  if (!(amount > 0)) return toast('กรุณากรอกยอดเงินให้ถูกต้อง', 'err');
+  const { ok, data } = await api.post(`/api/etax/${kind}`, { refDocId, reason: reason.trim() || reasons[0], amount });
+  if (!ok) return toast((data.errors ? data.errors.join(' · ') : data.error) || 'ออกเอกสารไม่สำเร็จ', 'err');
+  toast((isCredit ? 'ออกใบลดหนี้' : 'ออกใบเพิ่มหนี้') + 'เรียบร้อย (แบบร่าง)');
+  closeModal();
   await openDoc(data.id);
   onChangeCb && onChangeCb();
 }
@@ -541,8 +565,8 @@ async function loadSavedSignatures(docId) {
   }
   list.innerHTML = SAVED_SIGS.map((x) => `
     <div class="saved-sig-card">
-      <img src="${x.image}" alt="${x.name}">
-      <div class="ssc-name">${x.name}</div>
+      <img src="${esc(x.image)}" alt="${esc(x.name)}">
+      <div class="ssc-name">${esc(x.name)}</div>
       <div class="btn-row">
         <button class="btn btn-solid btn-sm" onclick="signWithSaved(${docId},${x.id})">ใช้ลงนาม</button>
         <button class="btn btn-danger btn-sm" onclick="delSavedSig(${x.id},${docId})">ลบ</button>
@@ -642,9 +666,9 @@ async function loadDocRequests(docId) {
   box.innerHTML = (items || []).map((r) => `
     <div class="rq-item ${r.overdue ? 'overdue' : ''}">
       <div>
-        <b>${r.toName || r.toEmail}</b> <small class="muted">(${r.toEmail})</small><br>
-        <small>${r.purpose === 'sign' ? 'ขอลายเซ็น' : 'ขอตรวจสอบ'} · ส่ง ${fmtDate(r.sentAt)}${r.dueDate ? ' · ภายใน ' + r.dueDate : ''}${r.overdue ? ' · <b style="color:var(--danger)">เกินกำหนด</b>' : ''}</small>
-        ${r.declineReason ? `<br><small style="color:var(--danger)">เหตุผล: ${r.declineReason}</small>` : ''}
+        <b>${esc(r.toName || r.toEmail)}</b> <small class="muted">(${esc(r.toEmail)})</small><br>
+        <small>${r.purpose === 'sign' ? 'ขอลายเซ็น' : 'ขอตรวจสอบ'} · ส่ง ${fmtDate(r.sentAt)}${r.dueDate ? ' · ภายใน ' + esc(r.dueDate) : ''}${r.overdue ? ' · <b style="color:var(--danger)">เกินกำหนด</b>' : ''}</small>
+        ${r.declineReason ? `<br><small style="color:var(--danger)">เหตุผล: ${esc(r.declineReason)}</small>` : ''}
       </div>
       <div style="text-align:right">
         <div>${RQ_STATUS[r.status] || r.status}</div>
@@ -696,11 +720,11 @@ async function promptSign(docId, opts = {}) {
     <div class="modal">
       <div class="modal-top"><h3>${opts.title || 'ลงนามเอกสาร'}</h3><button class="icon-btn" onclick="document.getElementById('sign-prompt-modal').remove()">✕</button></div>
       ${opts.note ? `<p class="muted" style="margin-bottom:12px">${opts.note}</p>` : ''}
-      <div class="field"><label>ชื่อผู้ลงนาม</label><input id="ps-name" value="${(typeof ME !== 'undefined' && ME && ME.displayName) || ''}"></div>
+      <div class="field"><label>ชื่อผู้ลงนาม</label><input id="ps-name" value="${esc((typeof ME !== 'undefined' && ME && ME.displayName) || '')}"></div>
       ${PS_SIGS.length ? `
         <div class="mlabel">เลือกจากคลังลายเซ็นของคุณ</div>
         <div class="saved-sig-list" style="margin-bottom:12px">
-          ${PS_SIGS.map((x) => `<div class="saved-sig-card"><img src="${x.image}"><div class="ssc-name">${x.name}</div>
+          ${PS_SIGS.map((x) => `<div class="saved-sig-card"><img src="${esc(x.image)}"><div class="ssc-name">${esc(x.name)}</div>
             <button class="btn btn-solid btn-sm" onclick="psUseSaved(${x.id})">ใช้ลงนาม</button></div>`).join('')}
         </div>` : ''}
       <div class="canvas-wrap">

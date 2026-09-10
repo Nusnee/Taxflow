@@ -33,17 +33,17 @@ async function loadDashExtra() {
   if (todoBox) {
     const todos = [];
     (inbox.items || []).filter((r) => r.status === 'sent').slice(0, 4).forEach((r) => todos.push({
-      text: `${r.purpose === 'sign' ? 'ลงนาม' : 'ตรวจสอบ'}เอกสาร ${r.doc ? r.doc.docNo : ''} จาก ${r.fromName}${r.dueDate ? ' ภายใน ' + r.dueDate : ''}`,
+      text: `${r.purpose === 'sign' ? 'ลงนาม' : 'ตรวจสอบ'}เอกสาร ${esc(r.doc ? r.doc.docNo : '')} จาก ${esc(r.fromName)}${r.dueDate ? ' ภายใน ' + esc(r.dueDate) : ''}`,
       overdue: r.overdue, action: `switchView('inbox')`, btn: 'ไปกล่องรับเอกสาร',
     }));
     docs.filter((d) => d.status === 'rejected').slice(0, 3).forEach((d) => todos.push({
-      text: `แก้ไขเอกสาร ${d.docNo} ที่ถูกตีกลับ`, action: `openDoc(${d.id})`, btn: 'เปิดเอกสาร',
+      text: `แก้ไขเอกสาร ${esc(d.docNo)} ที่ถูกตีกลับ`, action: `openDoc(${d.id})`, btn: 'เปิดเอกสาร',
     }));
     docs.filter((d) => d.status === 'pending' && d.sentTo && d.sentTo.status === 'sent' && d.sentTo.dueDate && d.sentTo.dueDate < new Date().toISOString().slice(0, 10)).slice(0, 3).forEach((d) => todos.push({
-      text: `คำขอของ ${d.docNo} ถึง ${d.sentTo.name} เกินกำหนดแล้ว — ติดตามหรือส่งใหม่`, overdue: true, action: `openDoc(${d.id})`, btn: 'เปิดเอกสาร',
+      text: `คำขอของ ${esc(d.docNo)} ถึง ${esc(d.sentTo.name)} เกินกำหนดแล้ว — ติดตามหรือส่งใหม่`, overdue: true, action: `openDoc(${d.id})`, btn: 'เปิดเอกสาร',
     }));
     docs.filter((d) => d.status === 'draft').slice(0, 3).forEach((d) => todos.push({
-      text: `จัดการแบบร่าง ${d.docNo} ให้เสร็จ (บันทึกเสร็จสิ้น หรือส่งให้คู่ค้า)`, action: `openDoc(${d.id})`, btn: 'เปิดเอกสาร',
+      text: `จัดการแบบร่างเอกสาร (${DOC_LABEL[d.type] || d.type}) ให้เสร็จ (บันทึกเสร็จสิ้น หรือส่งให้คู่ค้า)`, action: `openDoc(${d.id})`, btn: 'เปิดเอกสาร',
     }));
     todoBox.innerHTML = todos.length ? todos.slice(0, 7).map((t) => `
       <div class="todo-item ${t.overdue ? 'overdue' : ''}">
