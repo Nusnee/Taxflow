@@ -20,6 +20,11 @@ function baht(n) {
   return (Number(n) || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// escape ข้อความก่อนแทรกลง innerHTML — ใช้กับข้อมูลทุกอย่างที่มาจากผู้ใช้/คู่ค้า (กัน stored XSS)
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 function toast(msg, kind = 'ok') {
   let el = document.querySelector('.toast');
   if (!el) { el = document.createElement('div'); el.className = 'toast'; document.body.appendChild(el); }

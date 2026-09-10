@@ -119,7 +119,7 @@ async function loadOverview() {
     const cp = d.buyer || d.payee || '-';
     const amt = d.type === 'ETAX' ? d.total : d.net;
     return `<tr class="row-click" onclick="openDoc(${d.id})"><td class="docno">${d.docNo}</td><td>${badge(d.type)}</td><td>${cp}</td>
-      <td class="num">${baht(amt)}</td><td>${statusChip(d.status)}${d.sentTo && d.status === 'pending' ? `<div class="sent-to">ส่งถึง ${d.sentTo.name}</div>` : ''}</td>
+      <td class="num">${baht(amt)}</td><td>${statusChip(d.status)}${d.sentTo && d.status === 'pending' ? `<div class="sent-to">ส่งถึง ${esc(d.sentTo.name)}</div>` : ''}</td>
       <td class="actions" onclick="event.stopPropagation()"><a class="btn btn-ghost btn-sm" href="/api/documents/${d.id}/pdf" target="_blank">PDF</a></td></tr>`;
   }).join('') || emptyRow(6);
 }
@@ -140,7 +140,7 @@ async function loadDocs() {
     return `<tr class="row-click" onclick="openDoc(${d.id})">
       <td class="docno">${d.docNo}</td><td>${badge(d.type)}</td><td>${cp}</td>
       <td class="num">${baht(d.base)}</td><td class="num">${baht(taxVal)}</td><td class="num">${baht(total)}</td>
-      <td>${statusChip(d.status)}${d.sentTo && d.status === 'pending' ? `<div class="sent-to">ส่งถึง ${d.sentTo.name}</div>` : ''}</td>
+      <td>${statusChip(d.status)}${d.sentTo && d.status === 'pending' ? `<div class="sent-to">ส่งถึง ${esc(d.sentTo.name)}</div>` : ''}</td>
       <td class="actions" onclick="event.stopPropagation()">
         <a class="btn btn-ghost btn-sm" href="/api/documents/${d.id}/pdf" target="_blank">PDF</a>
         <button class="btn btn-ghost btn-sm" onclick="openDoc(${d.id})">จัดการ</button>
@@ -156,11 +156,11 @@ async function loadContacts() {
   document.getElementById('ct-list').innerHTML = items.map((c) => `
     <div class="contact-item">
       <div style="min-width:0">
-        <b>${c.name}</b>
-        <small>${c.kind === 'buyer' ? 'ลูกค้า' : 'อินฟลู/ผู้รับเงิน'} · ${c.taxId || 'ไม่มีเลขภาษี'}</small>
-        ${c.phone || c.email ? `<small>${[c.phone, c.email].filter(Boolean).join(' · ')}</small>` : ''}
-        ${c.bank ? `<small>บัญชี: ${c.bank}</small>` : ''}
-        ${c.note ? `<small style="color:var(--orange-deep)">${c.note}</small>` : ''}
+        <b>${esc(c.name)}</b>
+        <small>${c.kind === 'buyer' ? 'ลูกค้า' : 'อินฟลู/ผู้รับเงิน'} · ${esc(c.taxId || 'ไม่มีเลขภาษี')}</small>
+        ${c.phone || c.email ? `<small>${esc([c.phone, c.email].filter(Boolean).join(' · '))}</small>` : ''}
+        ${c.bank ? `<small>บัญชี: ${esc(c.bank)}</small>` : ''}
+        ${c.note ? `<small style="color:var(--orange-deep)">${esc(c.note)}</small>` : ''}
       </div>
       <button class="btn btn-danger btn-sm" onclick="delContact(${c.id})">ลบ</button>
     </div>`).join('') || '<div class="empty" style="color:var(--ink-soft);font-size:13px;padding:10px;">ยังไม่มีคู่ค้า</div>';
@@ -170,8 +170,8 @@ function fillDatalists() {
   const buyers = CONTACTS.filter((c) => c.kind === 'buyer');
   const payees = CONTACTS.filter((c) => c.kind === 'payee');
   const bl = document.getElementById('buyers'), pl = document.getElementById('payees');
-  if (bl) bl.innerHTML = buyers.map((c) => `<option value="${c.name}">`).join('');
-  if (pl) pl.innerHTML = payees.map((c) => `<option value="${c.name}">`).join('');
+  if (bl) bl.innerHTML = buyers.map((c) => `<option value="${esc(c.name)}">`).join('');
+  if (pl) pl.innerHTML = payees.map((c) => `<option value="${esc(c.name)}">`).join('');
 }
 async function addContact() {
   const name = document.getElementById('ct-name').value.trim();

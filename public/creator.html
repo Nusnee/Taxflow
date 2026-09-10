@@ -75,7 +75,15 @@
         <div class="field"><label>ประเภทเงินได้</label><select id="c-income"><option>มาตรา 40(2)</option><option>มาตรา 40(8)</option></select></div>
         <div class="row">
           <div class="field"><label>ยอดเงินก่อนหัก (บาท)</label><input id="c-amount" type="number" placeholder="12000" oninput="previewWht()"></div>
-          <div class="field"><label>อัตราภาษี (%)</label><input id="c-rate" type="number" value="3" oninput="previewWht()"></div>
+          <div class="field"><label>อัตราภาษี (%)</label>
+            <select id="c-rate" onchange="previewWht()">
+              <option value="1">1%</option>
+              <option value="2">2%</option>
+              <option value="3" selected>3%</option>
+              <option value="5">5%</option>
+              <option value="10">10%</option>
+              <option value="15">15%</option>
+            </select></div>
         </div>
         <div class="result" id="c-preview"><div class="empty">กรอกยอดเงินเพื่อดูผลการคำนวณ</div></div>
         <button class="btn btn-solid btn-block" style="margin-top:16px;" onclick="storeWht()">บันทึกเอกสาร</button>

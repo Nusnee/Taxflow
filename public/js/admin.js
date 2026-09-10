@@ -109,10 +109,6 @@ async function decide(id, approve) {
   openUser(id);
 }
 
-function esc(s) {
-  return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
-
 (async function init() {
   ADMIN_ME = await guard('admin');
   if (!ADMIN_ME) return;
