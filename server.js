@@ -21,6 +21,8 @@ const pdpa = require('./lib/pdpa');
 const thaiid = require('./lib/thaiid');
 const filestore = require('./lib/filestore');
 const { createRouter, readJsonBody, sendJson, sendHtml } = require('./lib/router');
+const ratelimit = require('./lib/ratelimit');
+const magicbytes = require('./lib/magicbytes');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -116,8 +118,25 @@ function maskEmail(email) {
 }
 function currentUser(req) {
   const payload = auth.verifyToken(auth.parseCookies(req).tf_session);
-  return payload ? store.find('users', payload.uid) : null;
+  if (!payload) return null;
+  const user = store.find('users', payload.uid);
+  if (!user) return null;
+  // เพิกถอน session ได้ทันที: ถ้า tokenVersion ใน token ไม่ตรงกับปัจจุบัน (logout-all/ลบบัญชี)
+  // หรือบัญชีถูกลบไปแล้ว ให้ถือว่า token นี้ใช้ไม่ได้อีกต่อไป แม้ยังไม่หมดอายุตามเวลาก็ตาม
+  if ((payload.tv || 0) !== (user.tokenVersion || 0)) return null;
+  if (user.deleted) return null;
+  return user;
 }
+// จำกัดจำนวนครั้งของ endpoint ที่เสี่ยงถูกยิงถล่ม (login/register/otp) — คืน true แล้วตอบ 429 ถ้าเกินโควตา
+function rateLimited(res, key, limit, windowMs, message) {
+  const r = ratelimit.hit(key, limit, windowMs);
+  if (!r.allowed) {
+    sendJson(res, 429, { error: message || `ทำรายการถี่เกินไป กรุณารออีกประมาณ ${r.retryAfterSec} วินาทีแล้วลองใหม่` });
+    return true;
+  }
+  return false;
+}
+
 function requireAuth(handler) {
   return (req, res) => {
     const user = currentUser(req);
@@ -255,6 +274,8 @@ function requireAdmin(handler) {
  *  บัญชีจะยังใช้งานไม่ได้จนกว่าจะยืนยันรหัส OTP ที่ส่งไปทางอีเมล
  * ========================================================= */
 api.post('/api/auth/register', async (req, res) => {
+  // ข้อ: ไม่มี rate limit ที่ register — จำกัดจำนวนบัญชีที่สมัครได้ต่อ IP ต่อชั่วโมง
+  if (rateLimited(res, `register:${ratelimit.clientIp(req)}`, 8, 60 * 60 * 1000, 'สมัครสมาชิกถี่เกินไปจากเครือข่ายนี้ กรุณาลองใหม่ภายหลัง')) return;
   const b = await readJsonBody(req);
   const email = String(b.email || '').trim().toLowerCase();
 
@@ -312,7 +333,7 @@ api.post('/api/auth/register/verify-otp', async (req, res) => {
   const user = store.find('users', result.otp.userId);
   if (!user) return sendJson(res, 404, { error: 'ไม่พบบัญชีผู้ใช้' });
   const updated = store.update('users', user.id, { emailVerified: true, emailVerifiedAt: new Date().toISOString() });
-  auth.setSessionCookie(res, auth.createToken({ uid: user.id, role: user.role }));
+  auth.setSessionCookie(res, auth.createToken({ uid: user.id, role: user.role, tv: user.tokenVersion || 0 }));
   logAudit(user.id, null, 'verify-email', 'ยืนยันอีเมลสำเร็จ บัญชีพร้อมใช้งาน', user.displayName);
   sendJson(res, 200, { user: publicUser(updated) });
 });
@@ -323,6 +344,7 @@ api.post('/api/auth/register/resend-otp', async (req, res) => {
   if (!row || row.purpose !== 'register') return sendJson(res, 404, { error: 'ไม่พบรายการยืนยันอีเมลนี้ กรุณาสมัครใหม่อีกครั้ง' });
   const r = otp.regenerate(b.otpId);
   if (!r) return sendJson(res, 400, { error: 'ไม่สามารถขอรหัสใหม่ได้ กรุณาสมัครใหม่อีกครั้ง' });
+  if (r.exhausted) return sendJson(res, 429, { error: 'ขอรหัสใหม่ครบจำนวนครั้งที่กำหนดแล้ว กรุณาสมัครใหม่อีกครั้ง' });
   if (r.throttled) return sendJson(res, 429, { error: `กรุณารออีก ${r.waitSec} วินาทีก่อนขอรหัสใหม่` });
   const user = store.find('users', row.userId);
   const mailResult = await mailer.sendOtpEmail(user.email, { code: r.code, purpose: 'register', displayName: user.displayName });
@@ -333,6 +355,9 @@ api.post('/api/auth/register/resend-otp', async (req, res) => {
 api.post('/api/auth/login', async (req, res) => {
   const b = await readJsonBody(req);
   const email = String(b.email || '').trim().toLowerCase();
+  // ข้อ: ไม่มี rate limit ที่ login — จำกัดทั้งต่อ IP (กัน brute-force กว้างๆ) และต่อ IP+อีเมล (กัน targeted)
+  if (rateLimited(res, `login:ip:${ratelimit.clientIp(req)}`, 30, 10 * 60 * 1000)) return;
+  if (email && rateLimited(res, `login:acct:${ratelimit.clientIp(req)}:${email}`, 8, 10 * 60 * 1000, 'ลองเข้าสู่ระบบผิดถี่เกินไป กรุณารอสักครู่แล้วลองใหม่')) return;
   const user = store.findOne('users', (u) => u.email === email);
   if (!user || !auth.verifyPassword(b.password, user.passwordHash)) return sendJson(res, 401, { error: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' });
 
@@ -363,7 +388,7 @@ api.post('/api/auth/login/verify-otp', async (req, res) => {
   if (!result.ok) return sendJson(res, 400, { error: result.error });
   const user = store.find('users', result.otp.userId);
   if (!user) return sendJson(res, 404, { error: 'ไม่พบบัญชีผู้ใช้' });
-  auth.setSessionCookie(res, auth.createToken({ uid: user.id, role: user.role }));
+  auth.setSessionCookie(res, auth.createToken({ uid: user.id, role: user.role, tv: user.tokenVersion || 0 }));
   logAudit(user.id, null, 'login', 'เข้าสู่ระบบสำเร็จ (ยืนยันด้วย OTP)', user.displayName);
   sendJson(res, 200, { user: publicUser(user) });
 });
@@ -375,6 +400,7 @@ api.post('/api/auth/login/resend-otp', async (req, res) => {
   if (!row || row.purpose !== 'login') return sendJson(res, 404, { error: 'ไม่พบรายการ OTP นี้ กรุณาเข้าสู่ระบบใหม่อีกครั้ง' });
   const r = otp.regenerate(b.otpId);
   if (!r) return sendJson(res, 400, { error: 'ไม่สามารถขอรหัสใหม่ได้ กรุณาเข้าสู่ระบบใหม่อีกครั้ง' });
+  if (r.exhausted) return sendJson(res, 429, { error: 'ขอรหัสใหม่ครบจำนวนครั้งที่กำหนดแล้ว กรุณาเข้าสู่ระบบใหม่อีกครั้ง' });
   if (r.throttled) return sendJson(res, 429, { error: `กรุณารออีก ${r.waitSec} วินาทีก่อนขอรหัสใหม่` });
   const user = store.find('users', row.userId);
   const mailResult = await mailer.sendOtpEmail(user.email, { code: r.code, purpose: 'login', displayName: user.displayName });
@@ -382,6 +408,13 @@ api.post('/api/auth/login/resend-otp', async (req, res) => {
 });
 
 api.post('/api/auth/logout', (req, res) => { auth.clearSessionCookie(res); sendJson(res, 200, { ok: true }); });
+// ออกจากระบบทุกอุปกรณ์ — เพิ่ม tokenVersion เพื่อเพิกถอน session เดิมทั้งหมดทันที (ไม่ใช่แค่ลบ cookie ฝั่งนี้)
+api.post('/api/auth/logout-all', requireAuth((req, res) => {
+  store.update('users', req.user.id, { tokenVersion: (req.user.tokenVersion || 0) + 1 });
+  auth.clearSessionCookie(res);
+  logAudit(req.user.id, null, 'logout-all', 'ออกจากระบบทุกอุปกรณ์ (เพิกถอน session เดิมทั้งหมด)', req.user.displayName);
+  sendJson(res, 200, { ok: true });
+}));
 api.get('/api/auth/me', (req, res) => {
   const user = currentUser(req);
   if (!user) return sendJson(res, 401, { error: 'ยังไม่ได้เข้าสู่ระบบ' });
@@ -424,6 +457,14 @@ api.put('/api/auth/profile', requireAuth(async (req, res) => {
     return sendJson(res, 409, { error: 'เลขประจำตัวผู้เสียภาษีนี้ถูกใช้โดยบัญชีอื่นแล้ว' });
   }
 
+  // ข้อ: การเปลี่ยนเลขบัญชีธนาคารรับเงินเป็นช่องทางหลักของการโกงเปลี่ยนบัญชีรับเงิน
+  // ต้องยืนยันด้วย OTP ก่อนบันทึกทุกครั้ง (เดิมแก้ได้ทันทีเหมือนข้อมูลอื่นๆ ในโปรไฟล์)
+  const bankChanged = patch.bank && JSON.stringify(patch.bank) !== JSON.stringify(req.user.bank || {});
+  if (bankChanged) {
+    const check = otp.verify(b.otpId, b.code, { userId: req.user.id, purpose: 'change-bank' });
+    if (!check.ok) return sendJson(res, 400, { error: 'เปลี่ยนบัญชีธนาคารต้องยืนยันด้วยรหัส OTP ก่อน: ' + check.error, requireOtp: true });
+  }
+
   // ถ้าแก้ข้อมูลสำคัญหลังผ่านการตรวจสอบแล้ว ต้องกลับไปรอตรวจสอบใหม่
   const critical = ['taxId', 'companyName', 'displayName', 'entityType', 'vatRegistered'];
   const changedCritical = critical.some((k) => JSON.stringify(patch[k]) !== undefined && patch[k] !== undefined && JSON.stringify(patch[k]) !== JSON.stringify(req.user[k]));
@@ -434,7 +475,7 @@ api.put('/api/auth/profile', requireAuth(async (req, res) => {
   }
 
   const u = store.update('users', req.user.id, { ...patch, ...extra });
-  logAudit(req.user.id, null, 'profile-update', 'แก้ไขข้อมูลโปรไฟล์', req.user.displayName);
+  logAudit(req.user.id, null, 'profile-update', bankChanged ? 'แก้ไขข้อมูลโปรไฟล์ (รวมถึงเปลี่ยนบัญชีธนาคาร — ยืนยันด้วย OTP แล้ว)' : 'แก้ไขข้อมูลโปรไฟล์', req.user.displayName);
   sendJson(res, 200, { user: publicUser(u), profile: profileMeta(u) });
 }));
 
@@ -446,6 +487,7 @@ api.post('/api/auth/brand-image', requireAuth(async (req, res) => {
   if (!IMG_MIME[b.mime]) return sendJson(res, 415, { error: 'รองรับเฉพาะไฟล์ PNG, JPG, WEBP เท่านั้น' });
   const buf = Buffer.from(b.dataBase64, 'base64');
   if (buf.length > IMG_MAX) return sendJson(res, 413, { error: 'ไฟล์รูปภาพต้องมีขนาดไม่เกิน 1 MB' });
+  if (!magicbytes.matches(buf, b.mime)) return sendJson(res, 415, { error: 'ไฟล์ไม่ตรงกับชนิดที่แจ้ง กรุณาอัปโหลดไฟล์รูปภาพจริง' });
 
   const field = kind === 'seal' ? 'sealFile' : 'logoFile';
   const old = req.user[field];
@@ -509,6 +551,7 @@ api.post('/api/kyc', requireAuth(async (req, res) => {
   const buf = Buffer.from(b.dataBase64, 'base64');
   if (!buf.length) return sendJson(res, 400, { error: 'ไฟล์เสียหายหรือว่างเปล่า' });
   if (buf.length > KYC_MAX) return sendJson(res, 413, { error: 'ไฟล์มีขนาดเกิน 5 MB' });
+  if (!magicbytes.matches(buf, b.mime)) return sendJson(res, 415, { error: 'ไฟล์ไม่ตรงกับชนิดที่แจ้ง กรุณาอัปโหลดไฟล์จริง' });
 
   // อัปโหลดซ้ำประเภทเดิม = แทนที่ของเดิม
   const old = store.findOne('kyc_documents', (k) => k.userId === req.user.id && k.docType === b.docType);
@@ -605,6 +648,11 @@ api.post('/api/admin/users/:id/verify', requireAdmin(async (req, res) => {
   const b = await readJsonBody(req);
   const u = store.find('users', req.params.id);
   if (!u || u.role === 'admin') return sendJson(res, 404, { error: 'ไม่พบผู้ใช้' });
+  // ข้อ: อนุมัติ/ไม่อนุมัติได้เฉพาะบัญชีที่ "ส่งเอกสารขอตรวจสอบแล้ว" (verifyStatus=pending) เท่านั้น
+  // กันแอดมินกดอนุมัติบัญชีที่ยังไม่ได้ submit เอกสารเลย
+  if (u.verifyStatus !== 'pending') {
+    return sendJson(res, 400, { error: 'ผู้ใช้รายนี้ยังไม่ได้ส่งเอกสารขอตรวจสอบตัวตน จึงยังพิจารณาผลไม่ได้' });
+  }
   const approve = !!b.approve;
   const note = String(b.note || '').slice(0, 500);
   if (!approve && !note) return sendJson(res, 400, { error: 'กรุณาระบุเหตุผลที่ไม่อนุมัติ เพื่อให้ผู้ใช้แก้ไขได้ถูกต้อง' });
@@ -614,6 +662,10 @@ api.post('/api/admin/users/:id/verify', requireAdmin(async (req, res) => {
     verifiedAt: approve ? new Date().toISOString() : null,
     verifiedBy: req.user.displayName,
   });
+  // ข้อ: สถานะรายเอกสารใน kyc_documents ค้างเป็น pending ตลอด ไม่เคยอัปเดตตามผลตรวจของแอดมิน
+  for (const doc of store.all('kyc_documents', (k) => k.userId === u.id)) {
+    store.update('kyc_documents', doc.id, { status: approve ? 'approved' : 'rejected', reviewedAt: new Date().toISOString(), reviewedBy: req.user.displayName });
+  }
   logAudit(u.id, null, approve ? 'kyc-approve' : 'kyc-reject',
     approve ? 'ผู้ดูแลระบบอนุมัติการยืนยันตัวตน' : `ผู้ดูแลระบบไม่อนุมัติ: ${note}`, req.user.displayName);
   notify(u.id, 'kyc', approve
@@ -706,9 +758,13 @@ const OTP_SIGN_PURPOSES = {
     const r = store.find('requests', refId);
     return (r && r.toUserId === req.user.id && r.status === 'sent') ? r : null;
   },
+  // เปลี่ยนเลขบัญชีธนาคารรับเงิน — ไม่มี refId เพราะยืนยันตัวผู้ใช้เองเท่านั้น
+  'change-bank': (req) => req.user,
 };
 
 api.post('/api/otp/request', requireAuth(async (req, res) => {
+  // ข้อ: ไม่มี rate limit ที่ /api/otp/request — ป้องกันการยิงส่งอีเมล OTP ถล่มผู้ใช้คนเดียวซ้ำๆ
+  if (rateLimited(res, `otp-req:${req.user.id}`, 8, 10 * 60 * 1000, 'ขอรหัส OTP ถี่เกินไป กรุณารอสักครู่แล้วลองใหม่')) return;
   const b = await readJsonBody(req);
   const checker = OTP_SIGN_PURPOSES[b.purpose];
   if (!checker) return sendJson(res, 400, { error: 'ประเภทการยืนยันไม่ถูกต้อง' });
@@ -725,6 +781,7 @@ api.post('/api/otp/resend', requireAuth(async (req, res) => {
   if (!row || row.userId !== req.user.id) return sendJson(res, 404, { error: 'ไม่พบรายการ OTP นี้' });
   const r = otp.regenerate(b.otpId);
   if (!r) return sendJson(res, 400, { error: 'ไม่สามารถขอรหัสใหม่ได้ กรุณาเริ่มรายการใหม่' });
+  if (r.exhausted) return sendJson(res, 429, { error: 'ขอรหัสใหม่ครบจำนวนครั้งที่กำหนดแล้ว กรุณาเริ่มรายการใหม่' });
   if (r.throttled) return sendJson(res, 429, { error: `กรุณารออีก ${r.waitSec} วินาทีก่อนขอรหัสใหม่` });
   const mailResult = await mailer.sendOtpEmail(req.user.email, { code: r.code, purpose: row.purpose, displayName: req.user.displayName });
   sendJson(res, 200, { otpId: b.otpId, ...(mailResult.dev ? { devCode: r.code } : {}) });
@@ -1231,6 +1288,7 @@ api.post('/api/documents/:id/attachments', requireAuth(async (req, res) => {
   if (!ALLOWED_MIME[b.mime]) return sendJson(res, 415, { error: 'รองรับเฉพาะไฟล์ PDF, PNG, JPG, WEBP เท่านั้น' });
   const buf = Buffer.from(b.dataBase64, 'base64');
   if (buf.length > MAX_SIZE) return sendJson(res, 413, { error: 'ไฟล์มีขนาดเกิน 5 MB' });
+  if (!magicbytes.matches(buf, b.mime)) return sendJson(res, 415, { error: 'ไฟล์ไม่ตรงกับชนิดที่แจ้ง กรุณาอัปโหลดไฟล์จริง' });
   const storedName = crypto.randomBytes(12).toString('hex') + '.' + ALLOWED_MIME[b.mime];
   fs.writeFileSync(path.join(store.UPLOAD_DIR, storedName), buf);
   const att = store.insert('attachments', {
@@ -1289,9 +1347,13 @@ function ensureShare(doc, userId) {
   if (!share) share = store.insert('shares', { token: crypto.randomBytes(10).toString('hex'), docId: doc.id, userId });
   return share;
 }
+// ข้อ: URL ใน QR ไม่ควรสร้างจาก header Host ที่ผู้ร้องขอกำหนดเองได้ (Host header injection)
+// และไม่ควรบังคับเป็น http:// เสมอ — ให้ตั้งค่า PUBLIC_BASE_URL ใน production แทน
+// (เช่น https://taxflow.example.com) มิฉะนั้น fallback ไปใช้ Host header สำหรับพัฒนา/ทดสอบในเครื่อง
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 function verifyUrl(req, token) {
-  const host = req.headers.host || `localhost:${PORT}`;
-  return `http://${host}/verify.html?token=${token}`;
+  const base = PUBLIC_BASE_URL || `http://${req.headers.host || `localhost:${PORT}`}`;
+  return `${base}/verify.html?token=${token}`;
 }
 
 api.post('/api/documents/:id/share', requireAuth((req, res) => {
@@ -1406,7 +1468,7 @@ api.get('/api/export/xls', requireAuth((req, res) => {
  *  เก็บไฟล์เอกสารราชการ/ธุรกิจ เช่น ภ.ง.ด.90, ภ.พ.20, สัญญาจ้าง ฯลฯ
  * ========================================================= */
 const LIB_ALLOWED_MIME = { 'application/pdf': 'pdf', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
-const LIB_MAX_SIZE = 10 * 1024 * 1024; // 10 MB สำหรับเอกสารสแกน
+const LIB_MAX_SIZE = 5 * 1024 * 1024; // 5 MB — ให้ตรงกับที่ระบุไว้ในสเปก (โค้ดเดิมเขียนไว้ 10 MB ไม่ตรงกับเอกสาร)
 
 api.get('/api/library', requireAuth((req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -1426,7 +1488,8 @@ api.post('/api/library', requireAuth(async (req, res) => {
   if (!b.dataBase64) return sendJson(res, 400, { error: 'ไม่พบไฟล์' });
   if (!LIB_ALLOWED_MIME[b.mime]) return sendJson(res, 415, { error: 'รองรับเฉพาะไฟล์ PDF, PNG, JPG, WEBP' });
   const buf = Buffer.from(b.dataBase64, 'base64');
-  if (buf.length > LIB_MAX_SIZE) return sendJson(res, 413, { error: 'ไฟล์มีขนาดเกิน 10 MB' });
+  if (buf.length > LIB_MAX_SIZE) return sendJson(res, 413, { error: 'ไฟล์มีขนาดเกิน 5 MB' });
+  if (!magicbytes.matches(buf, b.mime)) return sendJson(res, 415, { error: 'ไฟล์ไม่ตรงกับชนิดที่แจ้ง กรุณาอัปโหลดไฟล์จริง' });
   const storedName = 'lib_' + crypto.randomBytes(12).toString('hex') + '.' + LIB_ALLOWED_MIME[b.mime];
   fs.writeFileSync(path.join(store.UPLOAD_DIR, storedName), buf);
   const row = store.insert('library', {
@@ -1562,7 +1625,7 @@ http.createServer(async (req, res) => {
   console.log(`  ฐานข้อมูล (SQLite): ${path.relative(process.cwd(), store.DB_FILE)}`);
   console.log(`  ผู้ใช้ในระบบ: ${store.count('users')} บัญชี | เอกสาร: ${store.count('documents')} | คลังเอกสาร: ${store.count('library')} | คู่ค้า: ${store.count('contacts')}`);
   console.log(`  คู่มือการใช้งาน: http://localhost:${PORT}/guide.html`);
-  console.log(`  ล้างข้อมูลหมดอายุตามนโยบายเก็บรักษา: OTP ${purged.otpRemoved} รายการ, แจ้งเตือน ${purged.notifyRemoved} รายการ`);
+  console.log(`  ล้างข้อมูลหมดอายุตามนโยบายเก็บรักษา: OTP ${purged.otpRemoved} รายการ, แจ้งเตือน ${purged.notifyRemoved} รายการ, บัญชีที่ไม่ยืนยันอีเมลเกิน 24 ชม. ${purged.unverifiedRemoved || 0} บัญชี`);
   if (seeded.length) {
     console.log(`\n  สร้างบัญชีผู้ใช้ตัวอย่างให้แล้ว (เข้าสู่ระบบเพื่อทดลองได้ทันที):`);
     for (const u of seeded) console.log(`    • ${u.email}  (${u.role})  รหัสผ่าน: ${u.password}`);
