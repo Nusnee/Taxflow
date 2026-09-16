@@ -163,15 +163,11 @@ ver14 เพิ่ม `purpose: 'register'` — สมัครแล้วบ�
 
 รหัสผ่านทั้งหมด `123456` (บัญชีที่สมัครใหม่ต้องใช้รหัสผ่านอย่างน้อย 8 ตัวอักษร)
 
-> หมายเหตุ: การเปลี่ยนแปลงทั้งหมดใน ver14 อยู่ในเวอร์ชัน SQLite (`node:sqlite`) นี้เท่านั้น
-> **ยังไม่ได้ย้ายไปยังเวอร์ชัน PostgreSQL** — ต้องอัปเดตแยกต่างหาก (ค้างมาตั้งแต่ ver13)
-
 ### สิ่งที่ยังไม่ได้ทำ (ข้อเสนอแนะการพัฒนาต่อ)
 
 * OTP ทาง SMS สำหรับธุรกรรมที่ควรแยกช่องทางจากอีเมล
 * เชื่อมฐานข้อมูลกรมพัฒนาธุรกิจการค้าเพื่อตรวจหนังสือรับรองอัตโนมัติ
 * แนะนำอัตราภาษีหัก ณ ที่จ่ายอัตโนมัติตามประเภทผู้รับเงินและประเภทงาน (2% / 3%)
-* ย้ายทุกอย่างใน ver13–ver14 ไปยังเวอร์ชัน PostgreSQL
 
 ## ใหม่ใน ver13 (แก้บั๊กสมัครสมาชิก/เข้าสู่ระบบ + เพิ่ม OTP อีเมลจริง + ภาพรวมระบบ)
 
@@ -193,9 +189,6 @@ ver14 เพิ่ม `purpose: 'register'` — สมัครแล้วบ�
 
 **4) คู่มือการใช้งานอ่านง่ายขึ้น**
 ปรับ `guide.html`: ขยายขนาดตัวอักษรทั้งหน้า, เพิ่มหัวข้อใหม่ "ยืนยันตัวตนด้วยรหัส OTP", เพิ่มกล่องภาพประกอบ (placeholder) ไว้ 5 จุดสำหรับใส่ภาพหน้าจอจริงในอนาคต, และเพิ่มหัวข้อท้ายเล่มสรุปเอกสารที่สร้างได้/ไม่ได้พร้อมลิงก์อ้างอิงกฎหมาย
-
-> หมายเหตุ: การเปลี่ยนแปลงทั้งหมดใน ver13 อยู่ในเวอร์ชัน SQLite (`node:sqlite`) นี้เท่านั้น ยังไม่ได้ย้ายไปยังเวอร์ชัน PostgreSQL
-
 
 ## ใหม่ใน ver12 (แก้บั๊กฟอนต์หัวตารางที่ซ่อนอยู่)
 
@@ -310,7 +303,7 @@ npm start
 เมื่อรันครั้งแรก ระบบจะสร้างฐานข้อมูล SQLite (`data/taxflow.db`) และเพิ่มบัญชีผู้ใช้ตัวอย่างให้อัตโนมัติ พร้อมแสดงข้อมูลตอนรัน:
 
 ```
-  TaxFlow running  ➜  http://localhost:3000
+  TaxFlow running  ➜  http://localhost:4000
   ฐานข้อมูล (SQLite): data/taxflow.db
   ผู้ใช้ในระบบ: 2 บัญชี | เอกสาร: 0 | คู่ค้า: 0
 
@@ -319,7 +312,7 @@ npm start
     • agency@taxflow.test   (agency)   รหัสผ่าน: 123456
 ```
 
-เปิดเบราว์เซอร์ที่ http://localhost:3000 แล้วเข้าสู่ระบบด้วยบัญชีตัวอย่าง หรือสมัครสมาชิกใหม่
+เปิดเบราว์เซอร์ที่ http://localhost:4000 แล้วเข้าสู่ระบบด้วยบัญชีตัวอย่าง หรือสมัครสมาชิกใหม่
 
 ### บัญชีผู้ใช้ตัวอย่าง
 
@@ -336,7 +329,7 @@ npm start
 
 | ตัวแปร | ใช้ทำอะไร | ค่าเริ่มต้นถ้าไม่ตั้ง |
 |---|---|---|
-| `PORT` | พอร์ตที่เว็บเซิร์ฟเวอร์ฟัง | `3000` |
+| `PORT` | พอร์ตที่เว็บเซิร์ฟเวอร์ฟัง | `4000` |
 | `SESSION_SECRET` | คีย์เซ็น session token (HMAC) — ถ้าใครรู้ค่านี้ปลอม token เป็นผู้ใช้ใดก็ได้ | สุ่มแล้วเก็บลง `data/session.key` อัตโนมัติ |
 | `FILE_ENCRYPTION_KEY` | คีย์เข้ารหัสไฟล์ KYC/คลังเอกสาร (hex 64 ตัวอักษร หรือข้อความใดก็ได้ที่จะ derive เป็นคีย์) | สุ่มแล้วเก็บลง `data/file.key` อัตโนมัติ |
 | `TAXFLOW_DEV` | ตั้งเป็น `1` เพื่อแนบรหัส OTP กลับมาใน response (`devCode`) ตอนยังไม่ได้ตั้งค่าอีเมลผู้ส่ง — **ห้ามเปิดใน production** เพราะเท่ากับปิด OTP ทั้งระบบ | ปิด (ไม่แนบ devCode) |
@@ -480,6 +473,19 @@ brew services start postgresql@16
 </details>
 
 <details>
+<summary>Windows</summary>
+
+1. ดาวน์โหลดตัวติดตั้งจาก [postgresql.org/download/windows](https://www.postgresql.org/download/windows/)
+   (ลิงก์ไปหน้าดาวน์โหลดของ EDB) แล้วรัน `.exe`
+2. ระหว่างติดตั้ง: ตั้งรหัสผ่านของผู้ใช้ `postgres` (จำไว้ให้ดี), พอร์ตปล่อยเป็นค่าเริ่มต้น `5432`,
+   ติ๊ก "Stack Builder" ออกได้ (ไม่จำเป็น)
+3. ตัวติดตั้งจะลง **pgAdmin 4** (โปรแกรม GUI จัดการฐานข้อมูล) มาให้ด้วย และตั้ง PostgreSQL เป็น
+   Windows Service ให้อัตโนมัติ (รันตอนเปิดเครื่องเสมอ ไม่ต้อง `start`/`stop` เอง)
+4. เปิด **SQL Shell (psql)** จากเมนู Start (ติดตั้งมาพร้อมกัน) เพื่อรันคำสั่งในขั้นตอนที่ 2–3 ด้านล่าง —
+   กด Enter ผ่านค่า default (Server/Database/Port/Username) จนถึงช่อง Password แล้วใส่รหัสผ่านที่ตั้งไว้
+</details>
+
+<details>
 <summary>Docker (ไม่ต้องติดตั้งอะไรลงเครื่อง)</summary>
 
 ```bash
@@ -492,16 +498,32 @@ docker run --name taxflow-postgres -e POSTGRES_USER=taxflow \
 
 **2) สร้างผู้ใช้และฐานข้อมูล** (ข้ามได้ถ้าใช้ Docker ด้านบน)
 
+Linux/macOS:
 ```bash
 sudo -u postgres psql -c "CREATE USER taxflow WITH PASSWORD 'changeme';"
 sudo -u postgres psql -c "CREATE DATABASE taxflow OWNER taxflow;"
 ```
 
+Windows (จาก **SQL Shell (psql)** ที่ล็อกอินด้วยผู้ใช้ `postgres` แล้ว):
+```sql
+CREATE USER taxflow WITH PASSWORD 'changeme';
+CREATE DATABASE taxflow OWNER taxflow;
+```
+
 **3) รันสคริปต์สร้างตาราง**
 
+Linux/macOS:
 ```bash
 psql "postgres://taxflow:changeme@localhost:5432/taxflow" -f sql/postgres-schema.sql
 ```
+
+Windows (PowerShell, จากโฟลเดอร์โปรเจกต์ — ต้องเพิ่ม PostgreSQL `bin` เข้า PATH ก่อน
+เช่น `C:\Program Files\PostgreSQL\16\bin`, หรือเรียก `psql.exe` แบบเต็ม path):
+```powershell
+psql "postgres://taxflow:changeme@localhost:5432/taxflow" -f sql/postgres-schema.sql
+```
+ถ้าขึ้น `password authentication failed` ให้ใส่รหัสผ่านตอนถูกถาม (ไม่ต้องใส่ใน URL ก็ได้ถ้าไม่สะดวก
+พิมพ์รหัสผ่านลง terminal ตรง ๆ — ตัด `:changeme` ออกจาก URL แล้ว psql จะถามรหัสผ่านแทน)
 
 **4) ติดตั้งไดรเวอร์ `pg`** (แพ็กเกจเดียวที่ต้องเพิ่ม — โปรเจกต์นี้ไม่มี dependency บังคับอื่นเลย)
 
@@ -509,56 +531,33 @@ psql "postgres://taxflow:changeme@localhost:5432/taxflow" -f sql/postgres-schema
 npm install pg
 ```
 
-**5) ตั้งค่า `DATABASE_URL` แล้วเรียกใช้ `lib/store.pg.js` แทน `lib/store.js`**
+**5) ตั้งค่า `DATABASE_URL` แล้วรัน `server.js` ตามปกติ**
 
+`server.js` เลือกไดรเวอร์ฐานข้อมูลจากตัวแปรแวดล้อม `DATABASE_URL` เอง — มีค่านี้ = ใช้ `lib/store.pg.js`
+(PostgreSQL), ไม่มี = ใช้ `lib/store.js` (SQLite) เหมือนเดิม ไม่ต้องแก้โค้ดใด ๆ
+
+Linux/macOS:
 ```bash
 export DATABASE_URL="postgres://taxflow:changeme@localhost:5432/taxflow"
+node server.js
 ```
 
-ทดสอบว่าต่อฐานข้อมูลได้จริงโดยไม่ต้องแก้ `server.js` เลย:
-
-```bash
-node -e "
-(async () => {
-  const store = require('./lib/store.pg.js');
-  await store.ensureReady();
-  console.log('เชื่อมต่อ PostgreSQL สำเร็จ');
-  await store.close();
-})();
-"
+Windows PowerShell:
+```powershell
+$env:DATABASE_URL="postgres://taxflow:changeme@localhost:5432/taxflow"
+node server.js
 ```
 
-### ⚠️ ก่อนสลับ `server.js` มาใช้ `store.pg.js` จริง — ต้องรู้เรื่อง sync vs async
+ถ้าเชื่อมต่อสำเร็จ log ตอนเริ่มระบบจะขึ้น `ฐานข้อมูล (PostgreSQL): postgres://taxflow:****@localhost:5432/taxflow`
+แทนบรรทัด `ฐานข้อมูล (SQLite): data/taxflow.db` ตามปกติ
 
-`lib/store.js` (SQLite ผ่าน `node:sqlite`) เป็น **synchronous ล้วน** เรียกแล้วได้ผลลัพธ์ทันที
-โค้ดทั้งระบบ (`server.js` และ `lib/*.js` อื่น ๆ) จึงเรียก `store.insert(...)`, `store.find(...)` ฯลฯ
-แบบไม่ต้อง `await` ทุกจุด ส่วน `lib/store.pg.js` ผ่านไดรเวอร์ `pg` เป็น **asynchronous เสมอ**
-(ทุกฟังก์ชันคืนค่าเป็น Promise) — ฟังก์ชันชื่อและพารามิเตอร์ตรงกับ `store.js` ทุกตัวโดยตั้งใจ
-เพื่อให้สลับใช้งานง่ายที่สุดเท่าที่จะทำได้ แต่ **การสลับไฟล์ require เฉย ๆ ไม่พอ** — ทุกจุดที่เรียก
-`store.xxx(...)` ต้องเปลี่ยนเป็น `await store.xxx(...)` และ handler ที่ยังไม่ใช่ `async` ต้องเติม
-`async` ด้วย เช่น:
+> **หมายเหตุสำหรับ PowerShell**: ตัวแปรที่ตั้งด้วย `$env:DATABASE_URL=...` มีผลแค่หน้าต่าง terminal
+> ที่พิมพ์คำสั่งนั้น (session เดียว) — ถ้าปิด terminal แล้วเปิดใหม่ต้องตั้งค่าซ้ำ หรือจะตั้งถาวรผ่าน
+> "Edit environment variables for your account" ใน Windows Settings ก็ได้
 
-```js
-// เดิม (sync, ใช้กับ lib/store.js)
-api.get('/api/health', (req, res) => sendJson(res, 200, { status: 'ok' }));
-const user = store.find('users', id);
-
-// หลังสลับไป lib/store.pg.js (ต้องเป็น async ทั้งเชน)
-api.get('/api/health', async (req, res) => sendJson(res, 200, { status: 'ok' }));
-const user = await store.find('users', id);
-```
-
-Endpoint ส่วนใหญ่ใน `server.js` เป็น `async (req, res) => {...}` อยู่แล้ว (เพราะเรียก
-`await readJsonBody(req)`) จึงแค่เติม `await` หน้าทุกจุดที่เรียก `store.*` เท่านั้น ส่วนจุดที่ยังไม่ใช่
-`async` (เช่น `GET /api/health`, บาง handler ที่ไม่มี body ให้อ่าน) ต้องเติม `async` เข้าไปด้วย
-แนะนำให้ไล่แก้ทีละไฟล์ (`lib/pdpa.js`, `lib/profile.js` ก็เรียก `store.*` เหมือนกัน) แล้วรัน
-`npm test` + ทดสอบผ่านหน้าเว็บจริงให้ครบทุก flow ก่อน deploy จริง — เป็นงาน migration ที่ควรทำแยก
-ต่างหากด้วยความระมัดระวัง ไม่ใช่การสลับไฟล์เดียวแล้วจบ
-
-`lib/store.pg.js` เองผ่านการทดสอบใช้งานจริงแล้ว (`insert`/`find`/`where`/`update`/`remove`/
-`nextDocNumber`/`transaction` ทั้ง commit และ rollback) จึงใช้เป็นฐานสำหรับงาน migration นี้ได้ทันที
-ไฟล์ที่แนบเอกสาร/KYC/คลังเอกสารยังเก็บเป็นไฟล์บนดิสก์เหมือนเดิม (ไม่ได้ย้ายเข้า PostgreSQL) — ย้ายเฉพาะ
-ข้อมูลที่เดิมเก็บในตาราง
+`lib/store.pg.js` เป็น async ล้วน (ทุกฟังก์ชันคืน Promise) และ `server.js` เรียกผ่าน `await` ทุกจุดอยู่แล้ว
+จึงใช้แทน `lib/store.js` ได้ทันทีโดยไม่ต้องแก้ route handler ใด ๆ — ไฟล์ที่แนบเอกสาร/KYC/คลังเอกสาร
+ยังเก็บเป็นไฟล์บนดิสก์เหมือนเดิม (ไม่ได้ย้ายเข้า PostgreSQL) ย้ายเฉพาะข้อมูลที่เดิมเก็บในตาราง
 
 ## หมายเหตุ
 
