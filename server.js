@@ -27,7 +27,7 @@ const { createRouter, readJsonBody, sendJson, sendHtml } = require('./lib/router
 const ratelimit = require('./lib/ratelimit');
 const magicbytes = require('./lib/magicbytes');
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 4000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 // เรียก store.ensureReady() แบบ await จริงๆ ใน main() ด้านล่าง (ต่อ PostgreSQL ต้องรอผลก่อนเริ่มรับ request)
 
